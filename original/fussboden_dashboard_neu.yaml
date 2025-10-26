@@ -1,0 +1,241 @@
+title: Fußbodenheizung HK
+icon: mdi:heating-coil
+views:
+  - title: Übersicht
+    path: overview
+    icon: mdi:view-dashboard
+        cards:
+      # ==================== HEADER ====================
+          - type: markdown
+        content: |
+          # 🔥 Fußbodenheizung
+          Zentrale Steuerung aller Heizkreise
+
+      # ==================== GLOBALE EINSTELLUNGEN ====================
+          - type: vertical-stack
+        cards:
+          - type: markdown
+        content: "## ⚙️ Globale Einstellungen"
+      
+          - type: horizontal-stack
+        cards:
+          - type: tile
+            entity: input_select.fussboden_max_stufe
+            name: Max. Öffnungs-Stufe
+            icon: mdi:valve
+          
+          - type: tile
+            entity: sensor.max_ventiloffnung_prozent
+            name: Max. Öffnung (%)
+            icon: mdi:valve
+          
+          - type: tile
+            entity: input_number.fussboden_hysterese
+            name: Hysterese
+            icon: mdi:thermometer-lines
+
+          - type: horizontal-stack
+        cards:
+          - type: tile
+            entity: input_boolean.fussboden_zeitsteuerung_aktiv
+            name: Zeitsteuerung
+            icon: mdi:clock-check
+            tap_action:
+              action: toggle
+          
+          - type: tile
+            entity: input_datetime.fussboden_start_zeit
+            name: Start Zeit
+            icon: mdi:clock-start
+          
+          - type: tile
+            entity: input_datetime.fussboden_ende_zeit
+            name: Ende Zeit
+            icon: mdi:clock-end
+
+  # ==================== THERMOSTATE ====================
+          - type: vertical-stack
+        cards:
+          - type: markdown
+        content: "## 🏠 Räume"
+      
+      # BAD
+          - type: thermostat
+        entity: climate.fussboden_bad_hk
+        name: 🚿 Bad
+        features:
+          - type: climate-hvac-modes
+            hvac_modes:
+              - "off"
+              - heat
+      
+          - type: horizontal-stack
+        cards:
+          - type: tile
+            entity: sensor.temperatur_badezimmer_temperature
+            name: Bad Ist-Temp
+            icon: mdi:thermometer
+          - type: tile
+            entity: number.heizung_bad_fussboden_valve_closing_degree
+            name: Bad Ventil Schließgrad
+            icon: mdi:valve
+      
+      # BÜRO
+          - type: thermostat
+        entity: climate.fussboden_buro_hk
+        name: 💼 Büro
+        features:
+          - type: climate-hvac-modes
+            hvac_modes:
+              - "off"
+              - heat
+      
+          - type: horizontal-stack
+        cards:
+          - type: tile
+            entity: sensor.sbht_003c_a7e0_temperature
+            name: Büro Ist-Temp
+            icon: mdi:thermometer
+          - type: tile
+            entity: number.heizung_buro_fussboden_valve_closing_degree
+            name: Büro Ventil Schließgrad
+            icon: mdi:valve
+      
+      # FLUR
+          - type: thermostat
+        entity: climate.fussboden_flur_hk
+        name: 🚪 Flur
+        features:
+          - type: climate-hvac-modes
+            hvac_modes:
+              - "off"
+              - heat
+      
+          - type: horizontal-stack
+        cards:
+          - type: tile
+            entity: sensor.indoor_outdoor_meter_280f
+            name: Flur Ist-Temp
+            icon: mdi:thermometer
+          - type: tile
+            entity: number.heizung_flur_fussboden_valve_closing_degree
+            name: Flur Ventil Schließgrad
+            icon: mdi:valve
+      
+      # KÜCHE
+          - type: thermostat
+        entity: climate.fussboden_kuche_hk
+        name: 🍳 Küche
+        features:
+          - type: climate-hvac-modes
+            hvac_modes:
+              - "off"
+              - heat
+      
+          - type: horizontal-stack
+        cards:
+          - type: tile
+            entity: sensor.temp_wohnzimmer_sb
+            name: Küche Ist-Temp
+            icon: mdi:thermometer
+          - type: tile
+            entity: number.heizung_kuche_fussboden_valve_closing_degree
+            name: Küche Ventil Schließgrad
+            icon: mdi:valve
+      
+      # SCHLAFZIMMER
+          - type: thermostat
+        entity: climate.fussboden_schlafzimmer_hk
+        name: 🛏️ Schlafzimmer
+        features:
+          - type: climate-hvac-modes
+            hvac_modes:
+              - "off"
+              - heat
+      
+          - type: horizontal-stack
+        cards:
+          - type: tile
+            entity: sensor.temperatur_schlaf_temperature
+            name: Schlafzimmer Ist-Temp
+            icon: mdi:thermometer
+          - type: tile
+            entity: number.heizung_schlafzimmer_fussboden_valve_closing_degree
+            name: Schlafzimmer Ventil Schließgrad
+            icon: mdi:valve
+      
+      # WOHNZIMMER
+          - type: thermostat
+        entity: climate.fussboden_wohnzimmer_hk
+        name: 🛋️ Wohnzimmer
+        features:
+          - type: climate-hvac-modes
+            hvac_modes:
+              - "off"
+              - heat
+      
+          - type: horizontal-stack
+        cards:
+          - type: tile
+            entity: sensor.temp_wohnzimmer_sb
+            name: Wohnzimmer Ist-Temp
+            icon: mdi:thermometer
+          - type: tile
+            entity: number.heizung_wohnzimmer_fussboden_valve_closing_degree
+            name: Wohnzimmer Ventil Schließgrad
+            icon: mdi:valve
+
+  # ==================== SCHNELLSZENEN ====================
+          - type: vertical-stack
+        cards:
+          - type: markdown
+        content: "## 🎯 Schnellszenen"
+      
+          - type: horizontal-stack
+        cards:
+          - type: button
+            name: Komfort
+            icon: mdi:sofa
+            tap_action:
+              action: call-service
+              service: script.fussboden_szene_komfort
+            icon_height: 40px
+          
+          - type: button
+            name: Eco
+            icon: mdi:leaf
+            tap_action:
+              action: call-service
+              service: script.fussboden_szene_eco
+            icon_height: 40px
+          
+          - type: button
+            name: Nacht
+            icon: mdi:weather-night
+            tap_action:
+              action: call-service
+              service: script.fussboden_szene_nacht
+            icon_height: 40px
+          
+          - type: button
+            name: Aus
+            icon: mdi:power
+            tap_action:
+              action: call-service
+              service: script.fussboden_szene_aus
+            icon_height: 40px
+
+  # ==================== SYSTEM STATUS ====================
+          - type: vertical-stack
+        cards:
+          - type: markdown
+        content: "## 🛠️ System Status"
+      
+          - type: entities
+        entities:
+          - entity: input_boolean.fussboden_anti_verkalkung_aktiv
+            name: Anti-Verkalkung
+            icon: mdi:shield-refresh
+          - entity: automation.fussbodenheizung_anti_verkalkung
+            name: Anti-Verkalkung Automation
+            icon: mdi:robot
