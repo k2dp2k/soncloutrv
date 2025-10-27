@@ -42,7 +42,7 @@ class AntiCalcificationSwitch(SwitchEntity):
         self._attr_name = f"{config_entry.data['name']} Verkalkungsschutz"
         self._attr_unique_id = f"{DOMAIN}_{config_entry.entry_id}_anti_calcification"
         self._attr_icon = "mdi:water-off"
-        self._attr_is_on = False
+        self._attr_is_on = True  # Default: ON (enabled)
         self._last_exercise = None
         self._remove_listener = None
         
@@ -60,13 +60,14 @@ class AntiCalcificationSwitch(SwitchEntity):
         """Run when entity about to be added."""
         await super().async_added_to_hass()
         
-        # Schedule daily check for Sunday 3:00 AM
+        # Schedule daily check for Sunday 3:00 AM (enabled by default)
         if self._attr_is_on:
             self._remove_listener = async_track_time_interval(
                 self.hass,
                 self._async_check_exercise,
-                timedelta(hours=1),  # Check hourly
+                timedelta(hours=24),  # Check daily
             )
+            _LOGGER.info("%s: Anti-calcification protection enabled by default", self._attr_name)
 
     async def async_will_remove_from_hass(self) -> None:
         """Run when entity will be removed."""
