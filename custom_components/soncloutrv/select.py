@@ -79,6 +79,7 @@ class SonClouTRVControlModeSelect(SelectEntity):
             _LOGGER.error("Invalid control mode: %s", option)
             return
         
+        old_option = self._attr_current_option
         self._attr_current_option = option
         
         # Update config entry data
@@ -89,20 +90,13 @@ class SonClouTRVControlModeSelect(SelectEntity):
             self._config_entry, data=new_data
         )
         
-        # Update climate entity
-        if self._config_entry.entry_id in self.hass.data[DOMAIN]:
-            entities = self.hass.data[DOMAIN][self._config_entry.entry_id].get("entities", [])
-            for entity in entities:
-                if hasattr(entity, "_control_mode"):
-                    entity._control_mode = option
-                    _LOGGER.info(
-                        "%s: Control mode changed to %s",
-                        entity.name,
-                        option,
-                    )
-                    # Trigger immediate valve update
-                    await entity._async_control_heating()
+        _LOGGER.info(
+            "Control mode changed from %s to %s - reloading integration",
+            old_option,
+            option,
+        )
+        
+        # Reload the integration to apply changes immediately
+        await self.hass.config_entries.async_reload(self._config_entry.entry_id)
         
         self.async_write_ha_state()
-        
-        _LOGGER.info("Control mode changed to: %s", option)
