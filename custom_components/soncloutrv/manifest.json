@@ -10,5 +10,6 @@
   "iot_class": "local_polling",
   "dependencies": ["mqtt"],
   "after_dependencies": ["mqtt"],
-  "integration_type": "device"
+  "integration_type": "device",
+  "homeassistant": "2023.1.0"
 }
