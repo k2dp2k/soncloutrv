@@ -6,8 +6,9 @@
   "documentation": "https://github.com/k2dp2k/soncloutrv",
   "issue_tracker": "https://github.com/k2dp2k/soncloutrv/issues",
   "requirements": [],
-  "version": "1.0.0",
+  "version": "1.1.0",
   "iot_class": "local_polling",
-  "dependencies": ["climate"],
+  "dependencies": ["mqtt"],
+  "after_dependencies": ["mqtt"],
   "integration_type": "device"
 }

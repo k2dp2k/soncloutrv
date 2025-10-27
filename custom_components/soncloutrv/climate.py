@@ -228,26 +228,50 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
             )
         )
         
-        # Initial update
+        # Wait for TRV entity to be available (MQTT/Z2M startup)
+        _LOGGER.info("%s: Waiting for TRV entity %s to be available...", self.name, self._valve_entity)
+        max_wait = 30  # seconds
+        wait_interval = 1
+        for i in range(max_wait):
+            trv_state = self.hass.states.get(self._valve_entity)
+            if trv_state and trv_state.state not in (STATE_UNAVAILABLE, STATE_UNKNOWN):
+                _LOGGER.info("%s: TRV entity available after %d seconds", self.name, i)
+                break
+            if i < max_wait - 1:
+                await asyncio.sleep(wait_interval)
+        else:
+            _LOGGER.warning("%s: TRV entity not available after %d seconds, proceeding anyway", self.name, max_wait)
+        
+        # Read initial TRV state (battery, temperature, valve position)
+        await self._async_read_trv_state()
+        
+        # Initial temperature update
         await self._async_update_temp()
         
-        # IMPORTANT: Set initial valve opening degree immediately
-        # Otherwise TRV defaults to 100%
-        initial_opening = self._max_valve_position
+        # Force initial temperature calibration sync
+        await self._async_sync_temperature_calibration()
+        
+        # IMPORTANT: Set initial valve opening degree
+        # Calculate based on current temperature difference
+        initial_opening = self._calculate_desired_valve_opening()
+        if initial_opening < 0:
+            initial_opening = self._max_valve_position
         await self._async_set_valve_opening(initial_opening)
         _LOGGER.info(
-            "%s: Set initial valve opening to %d%% (preset: %s)",
+            "%s: Set initial valve opening to %d%% (preset: %s, mode: %s)",
             self.name,
             initial_opening,
             self._current_valve_step,
+            self._control_mode,
         )
         
-        # Force initial calibration sync
-        await self._async_sync_temperature_calibration()
-        await self._async_control_heating()
+        # Sync target temperature to TRV
+        if self._attr_target_temperature is not None:
+            await self._async_sync_target_temperature()
         
         # Update attributes
         self._update_extra_attributes()
+        self.async_write_ha_state()
 
     async def async_will_remove_from_hass(self) -> None:
         """Run when entity will be removed."""
@@ -279,9 +303,12 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
                 elif "valve_position" in attributes:
                     self._valve_position = int(attributes["valve_position"])
                 
-                # Also read battery and internal temperature
-                if "battery" in attributes:
-                    self._trv_battery = attributes["battery"]
+                # Read battery and internal temperature
+                # Battery can be in 'battery' or '_battery' attribute
+                for battery_attr in ["battery", "_battery"]:
+                    if battery_attr in attributes:
+                        self._trv_battery = attributes[battery_attr]
+                        break
                 
                 for attr_name in ["local_temperature", "current_temperature", "temperature"]:
                     if attr_name in attributes:
@@ -296,6 +323,37 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
         self._update_extra_attributes()
         self.async_write_ha_state()
 
+    async def _async_read_trv_state(self) -> None:
+        """Read initial TRV state (battery, temperature, valve position)."""
+        trv_state = self.hass.states.get(self._valve_entity)
+        if trv_state and trv_state.state not in (STATE_UNAVAILABLE, STATE_UNKNOWN):
+            attributes = trv_state.attributes
+            
+            # Read battery
+            for battery_attr in ["battery", "_battery"]:
+                if battery_attr in attributes:
+                    self._trv_battery = attributes[battery_attr]
+                    _LOGGER.info("%s: Initial battery level: %s%%", self.name, self._trv_battery)
+                    break
+            
+            # Read TRV internal temperature
+            for attr_name in ["local_temperature", "current_temperature", "temperature"]:
+                if attr_name in attributes:
+                    try:
+                        self._trv_internal_temp = float(attributes[attr_name])
+                        _LOGGER.info("%s: Initial TRV temperature: %.1f°C", self.name, self._trv_internal_temp)
+                        break
+                    except (ValueError, TypeError):
+                        pass
+            
+            # Read valve position
+            if "position" in attributes:
+                self._valve_position = int(attributes["position"])
+                _LOGGER.info("%s: Initial valve position: %d%%", self.name, self._valve_position)
+            elif "valve_position" in attributes:
+                self._valve_position = int(attributes["valve_position"])
+                _LOGGER.info("%s: Initial valve position: %d%%", self.name, self._valve_position)
+    
     async def _async_update_temp(self) -> None:
         """Update temperature from sensor."""
         temp_state = self.hass.states.get(self._temp_sensor)
@@ -372,8 +430,8 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
                         self._trv_internal_temp = float(temp)
                         break
                 
-                # Capture battery level
-                self._trv_battery = trv_state.attributes.get("battery")
+                # Capture battery level (can be 'battery' or '_battery')
+                self._trv_battery = trv_state.attributes.get("battery") or trv_state.attributes.get("_battery")
             
             device_id = self._valve_entity.replace("climate.", "")
             
