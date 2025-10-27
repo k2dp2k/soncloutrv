@@ -1,7 +1,9 @@
-# Fehleranalyse: Fußbodenheizung Home Assistant Konfiguration
+# Fehleranalyse: Fußbodenheizung Home Assistant Konfiguration (ARCHIV)
+
+> **⚠️ HINWEIS:** Diese Analyse bezieht sich auf die ursprünglichen YAML-Konfigurationsdateien, die als Grundlage für die SonTRV Custom Integration dienten. Die hier beschriebenen Probleme wurden in der neuen Integration behoben.
 
 ## Zusammenfassung
-Analyse der Dateien `fussboden_dashboard_neu.yaml` und `fussboden_heizung.yaml` für eine Fußbodenheizungssteuerung in Home Assistant.
+Analyse der originalen Dateien `fussboden_dashboard_neu.yaml` und `fussboden_heizung.yaml` für eine Fußbodenheizungssteuerung in Home Assistant.
 
 ## Gefundene Fehler
 
@@ -135,11 +137,13 @@ finale_oeffnung: >
 5. **OPTIONAL:** Ungenutzte Input Select Helper entfernen oder implementieren
 6. **OPTIONAL:** Anti-Verkalkung-Rückstellung verbessern
 
-## Validierung
+## Validierung (Legacy)
 
-Die Dateien können mit folgenden Tools validiert werden:
+> **Hinweis:** Die ursprünglichen YAML-Dateien wurden entfernt. Diese Validierungshinweise sind nur noch für historische Referenzen relevant.
+
+Die originalen Dateien konnten mit folgenden Tools validiert werden:
 ```bash
-# YAML Syntax
+# YAML Syntax (veraltet, Dateien wurden entfernt)
 python3 validate_config.py
 
 # Home Assistant Config Check
@@ -148,3 +152,16 @@ ha core check
 # Oder im Container:
 docker exec homeassistant python -m homeassistant --script check_config -c /config
 ```
+
+## Migration zur neuen Integration
+
+Alle Funktionen aus der ursprünglichen YAML-Konfiguration wurden in die **SonTRV Custom Integration** übernommen und verbessert:
+
+- ✅ Externe Temperatursensoren (fehlerfrei implementiert)
+- ✅ Proportionale Ventilsteuerung (5 Stufen statt binär)
+- ✅ Separate Sensoren pro Raum möglich
+- ✅ Verkalkungsschutz mit korrekter Rückstellung
+- ✅ Alle Entities korrekt definiert
+- ✅ Live-Konfiguration über UI
+
+Siehe [README.md](README.md) für Details zur neuen Integration.

@@ -24,6 +24,8 @@ SonTRV ist eine Home Assistant Custom Integration **speziell für Flächenheizun
 ```
 homeassistant-heating-analysis/
 ├── README.md                           # Diese Datei
+├── LICENSE                             # MIT Lizenz
+├── hacs.json                           # HACS Manifest
 ├── custom_components/
 │   └── soncloutrv/                    # SonTRV Integration
 │       ├── __init__.py
@@ -35,9 +37,13 @@ homeassistant-heating-analysis/
 │       ├── switch.py                  # Verkalkungsschutz
 │       ├── button.py                  # Manuelles Durchbewegen
 │       ├── translations/              # DE & EN Übersetzungen
+│       ├── icon.png                   # Integration Icon
 │       └── README.md                  # Detaillierte Dokumentation
-├── original/                          # Original YAML-Dateien (Archiv)
-└── validate_config.py                 # Legacy Validierungs-Script
+├── README_PLUGIN.md                   # Plugin-Architektur Dokumentation
+├── README_WRAPPER.md                  # Wrapper-Konzept Dokumentation
+├── README_SONOFF_TRVZB.md            # SONOFF TRVZB spezifische Infos
+├── TESTING.md                         # Test-Dokumentation
+└── WARP.md                            # Warp AI Kontext
 ```
 
 ## 📦 Installation
@@ -128,7 +134,10 @@ Nach der Einrichtung werden automatisch erstellt:
 ## 📚 Dokumentation
 
 - **[Integration README](custom_components/soncloutrv/README.md)** - Ausführliche Dokumentation
-- **[FEHLERANALYSE.md](FEHLERANALYSE.md)** - Analyse der originalen YAML-Konfiguration (Archiv)
+- **[Plugin-Architektur](README_PLUGIN.md)** - Technische Details zur Plugin-Struktur
+- **[Wrapper-Konzept](README_WRAPPER.md)** - Wrapper-Pattern Erklärung
+- **[SONOFF TRVZB Details](README_SONOFF_TRVZB.md)** - Hardware-spezifische Informationen
+- **[Testing](TESTING.md)** - Test-Setup und -Strategie
 
 ## 🔧 Services
 
