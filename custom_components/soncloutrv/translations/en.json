@@ -1,0 +1,94 @@
+{
+  "entity_component": {
+    "_": {
+      "state_attributes": {
+        "valve_position": {
+          "name": "Valve Position"
+        },
+        "control_mode": {
+          "name": "Control Mode"
+        },
+        "time_control_enabled": {
+          "name": "Time Control"
+        },
+        "last_valve_update": {
+          "name": "Last Valve Update"
+        },
+        "valve_adjustments_count": {
+          "name": "Valve Adjustments"
+        },
+        "temperature_difference": {
+          "name": "Temperature Difference"
+        },
+        "trv_internal_temperature": {
+          "name": "TRV Internal Temperature"
+        },
+        "external_temperature": {
+          "name": "External Temperature"
+        },
+        "trv_battery": {
+          "name": "TRV Battery"
+        },
+        "average_valve_position": {
+          "name": "Average Valve Position"
+        },
+        "temperature_trend": {
+          "name": "Temperature Trend"
+        },
+        "hysteresis": {
+          "name": "Hysteresis"
+        },
+        "min_valve_update_interval": {
+          "name": "Minimum Update Interval"
+        },
+        "last_exercise": {
+          "name": "Last Exercise"
+        },
+        "days_since_last_exercise": {
+          "name": "Days Since Last Exercise"
+        },
+        "next_exercise_in_days": {
+          "name": "Next Exercise In (Days)"
+        }
+      }
+    }
+  },
+  "config": {
+    "step": {
+      "user": {
+        "title": "Set up SonClouTRV",
+        "description": "Configure your SONOFF TRVZB thermostat",
+        "data": {
+          "name": "Name",
+          "valve_entity": "SONOFF TRVZB Thermostat (climate)",
+          "temp_sensor": "Temperature Sensor",
+          "min_temp": "Minimum Temperature",
+          "max_temp": "Maximum Temperature",
+          "target_temp": "Target Temperature",
+          "valve_opening_step": "Maximum Valve Opening (Step)"
+        }
+      }
+    },
+    "error": {
+      "entity_not_found": "Entity not found",
+      "not_climate_entity": "Entity must be of type 'climate'"
+    },
+    "abort": {
+      "already_configured": "Device is already configured"
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "SonClouTRV Options",
+        "description": "Adjust the settings",
+        "data": {
+          "min_temp": "Minimum Temperature",
+          "max_temp": "Maximum Temperature",
+          "target_temp": "Target Temperature",
+          "valve_opening_step": "Maximum Valve Opening (Step)"
+        }
+      }
+    }
+  }
+}

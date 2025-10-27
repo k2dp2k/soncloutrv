@@ -1,0 +1,8 @@
+calibrate_valve:
+  name: Ventil kalibrieren
+  description: Führt eine manuelle Kalibrierung des TRV-Ventils durch. Das Ventil durchläuft einen vollständigen Öffnungs- und Schließzyklus zur Neukalibrierung.
+  target:
+    entity:
+      domain: climate
+      integration: soncloutrv
+  fields: {}

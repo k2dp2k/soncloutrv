@@ -1,0 +1,156 @@
+{
+  "title": "SonTRV - Smart Thermostat Control",
+  "config": {
+    "step": {
+      "user": {
+        "title": "SonClouTRV einrichten",
+        "description": "Konfigurieren Sie Ihr SONOFF TRVZB Thermostat",
+        "data": {
+          "name": "Name",
+          "valve_entity": "SONOFF TRVZB Thermostat (climate)",
+          "temp_sensor": "Temperatursensor",
+          "min_temp": "Minimale Temperatur",
+          "max_temp": "Maximale Temperatur",
+          "target_temp": "Zieltemperatur",
+          "valve_opening_step": "Maximale Ventilöffnung (Stufe)"
+        }
+      }
+    },
+    "error": {
+      "entity_not_found": "Entity nicht gefunden",
+      "not_climate_entity": "Entity muss vom Typ 'climate' sein"
+    },
+    "abort": {
+      "already_configured": "Gerät ist bereits konfiguriert"
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "SonClouTRV Optionen",
+        "description": "Passen Sie die Einstellungen an",
+        "data": {
+          "min_temp": "Minimale Temperatur",
+          "max_temp": "Maximale Temperatur",
+          "target_temp": "Zieltemperatur",
+          "valve_opening_step": "Maximale Ventilöffnung (Stufe)"
+        }
+      }
+    }
+  },
+  "entity": {
+    "sensor": {
+      "valve_position": {
+        "name": "Ventilposition",
+        "state_attributes": {
+          "description": {
+            "name": "Beschreibung",
+            "state": {
+              "default": "Aktuelle Öffnung des Ventils (0-100%). Je höher, desto mehr Heizleistung."
+            }
+          }
+        }
+      },
+      "trv_internal_temperature": {
+        "name": "TRV Temperatur",
+        "state_attributes": {
+          "description": {
+            "name": "Beschreibung",
+            "state": {
+              "default": "Vom TRV-Sensor gemessene Temperatur (nur zum Vergleich mit externem Sensor)."
+            }
+          }
+        }
+      },
+      "trv_battery": {
+        "name": "TRV Batterie",
+        "state_attributes": {
+          "description": {
+            "name": "Beschreibung",
+            "state": {
+              "default": "Batterieladung des TRV-Thermostats. Warnung bei unter 20%."
+            }
+          }
+        }
+      },
+      "temperature_difference": {
+        "name": "Temperaturdifferenz",
+        "state_attributes": {
+          "description": {
+            "name": "Beschreibung",
+            "state": {
+              "default": "Differenz zwischen Soll- und Ist-Temperatur. Positiv = zu kalt, negativ = zu warm."
+            }
+          }
+        }
+      },
+      "average_valve_position": {
+        "name": "Ø Ventilposition",
+        "state_attributes": {
+          "description": {
+            "name": "Beschreibung",
+            "state": {
+              "default": "Durchschnittliche Ventilöffnung der letzten 10 Anpassungen."
+            }
+          }
+        }
+      }
+    },
+    "number": {
+      "hysteresis": {
+        "name": "Hysterese",
+        "state_attributes": {
+          "description": {
+            "name": "Beschreibung",
+            "state": {
+              "default": "Temperaturbereich, in dem das Ventil nicht verändert wird. Verhindert ständiges Schalten. Empfehlung: 0,3-0,7°C."
+            }
+          }
+        }
+      },
+      "min_valve_update_interval": {
+        "name": "Trägheit (Min. Update-Intervall)",
+        "state_attributes": {
+          "description": {
+            "name": "Beschreibung",
+            "state": {
+              "default": "Minimale Zeit zwischen Ventil-Anpassungen. Höhere Werte = träger. Empfehlung: 10-20 Min für Fußbodenheizung."
+            }
+          }
+        }
+      }
+    },
+    "switch": {
+      "anti_calcification": {
+        "name": "Verkalkungsschutz",
+        "state_attributes": {
+          "description": {
+            "name": "Beschreibung",
+            "state": {
+              "default": "Automatisches Ventil-Durchbewegen alle 7 Tage zur Vermeidung von Verkalkung und Festsitzen."
+            }
+          }
+        }
+      }
+    },
+    "button": {
+      "valve_exercise": {
+        "name": "Ventil Durchbewegen",
+        "state_attributes": {
+          "description": {
+            "name": "Beschreibung",
+            "state": {
+              "default": "Führt ein sofortiges Ventil-Durchbewegen durch (100% → 0% → zurück). Dauer: ca. 1 Minute."
+            }
+          }
+        }
+      }
+    }
+  },
+  "services": {
+    "calibrate_valve": {
+      "name": "Ventil kalibrieren",
+      "description": "Führt eine manuelle Kalibrierung des TRV-Ventils durch. Das Ventil durchläuft einen vollständigen Öffnungs- und Schließzyklus zur Neukalibrierung."
+    }
+  }
+}
