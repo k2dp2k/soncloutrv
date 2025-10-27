@@ -173,6 +173,10 @@ cards:
 - ✨ Umschaltbarer Steuermodus (binär/proportional)
 - ✅ **Proportional als Standard** - Optimiert für Fußbodenheizung
 - ✅ Proportionale Ventilsteuerung für präzise Regelung
+- ⏳ **Startup-Verbesserung** - Wartet auf MQTT/Z2M (bis 30 Sek)
+- 🔋 MQTT-Abhängigkeit in manifest.json
+- 🔋 Batterie-Fix: Unterstützt `_battery` Attribut
+- 🎯 Intelligente Ventil-Initialisierung beim Start
 - 📝 Erweiterte Dokumentation
 
 ### v1.0.0

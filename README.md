@@ -181,6 +181,19 @@ target:
   entity_id: climate.sontrv_bad
 ```
 
+## ⚡ Startup-Verhalten
+
+**Die Integration wartet automatisch auf Zigbee2MQTT/MQTT:**
+- Bis zu **30 Sekunden** Wartezeit auf TRV-Verfügbarkeit
+- Liest beim Start alle Sensorwerte (Batterie, Temperatur, Ventilposition)
+- Berechnet initiale Ventilöffnung basierend auf Temperaturdifferenz
+- Synchronisiert externe Temperatur und Sollwert sofort
+
+**Das bedeutet:**
+- Keine fehlenden Sensorwerte nach Neustart
+- Ventil startet nicht mehr mit 100%
+- Im Proportional-Modus: Direkt der richtige Wert!
+
 ## 🐛 Troubleshooting
 
 **Ventil öffnet nur wenig trotz großer Temperaturdifferenz:**
@@ -206,6 +219,10 @@ target:
 - ✨ **Umschaltbarer Steuermodus** - Binär oder Proportional über Select-Entity
 - ✅ **Proportional als Standard** - Optimiert für Fußbodenheizung
 - ✅ Proportionale Ventilsteuerung für präzise Temperaturregelung
+- ⏳ **Startup-Verbesserung** - Wartet auf MQTT/Z2M, liest alle Sensorwerte beim Start
+- 🔋 **MQTT-Abhängigkeit** - Lädt erst nach Zigbee2MQTT
+- 🔋 **Batterie-Fix** - Unterstützt `battery` und `_battery` Attribute
+- 🎯 **Intelligente Initialisierung** - Berechnet initiale Ventilöffnung statt fixer Wert
 - 📝 Dokumentation erweitert mit Steuermodus-Erklärung
 
 ### v1.0.0 (2025-10-27)
