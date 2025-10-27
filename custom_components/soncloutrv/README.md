@@ -170,15 +170,17 @@ cards:
 
 ## 📝 Changelog
 
-### v1.1.0
-- ✨ Umschaltbarer Steuermodus (binär/proportional)
+### v1.1.0 - Production Ready 🚀
+- ✨ Umschaltbarer Steuermodus (binär/proportional) mit Auto-Reload
 - ✅ **Proportional als Standard** - Optimiert für Fußbodenheizung
-- ✅ Proportionale Ventilsteuerung für präzise Regelung
-- ⏳ **Startup-Verbesserung** - Wartet auf MQTT/Z2M (bis 30 Sek)
-- 🔋 MQTT-Abhängigkeit in manifest.json
-- 🔋 Batterie-Fix: Unterstützt `_battery` Attribut
-- 🎯 Intelligente Ventil-Initialisierung beim Start
-- 📝 Erweiterte Dokumentation
+- 🎯 **Verkalkungsschutz default AN**
+- ⏳ MQTT Startup Wait (30s) für zuverlässige Initialisierung
+- 🔋 Sensor Auto-Detection (Z2M/ZHA kompatibel)
+- 🔋 Batterie-Fix: `_battery`, `battery`, `_battery_level`
+- 📊 Proxy-Sensoren - lesen vom originalen TRV
+- 🎯 Intelligente Ventil-Init basierend auf Temp-Differenz
+- 🐛 Bugfixes: Duplikat entfernt, Entity-ID korrigiert
+- 📝 Vollständige Validierung (VALIDATION.md)
 
 ### v1.0.0
 - Initial Release

@@ -165,6 +165,7 @@ Gewählte Stufe: 2 (40% max)
 ## 📚 Dokumentation
 
 - **[Integration README](custom_components/soncloutrv/README.md)** - Ausführliche Dokumentation
+- **[Validation Summary](VALIDATION.md)** - ✅ Kompatibilitätsprüfung & Validierung
 - **[Plugin-Architektur](README_PLUGIN.md)** - Technische Details zur Plugin-Struktur
 - **[Wrapper-Konzept](README_WRAPPER.md)** - Wrapper-Pattern Erklärung
 - **[SONOFF TRVZB Details](README_SONOFF_TRVZB.md)** - Hardware-spezifische Informationen
@@ -216,15 +217,31 @@ target:
 
 ## 📄 Changelog
 
-### v1.1.0 (2025-10-27)
-- ✨ **Umschaltbarer Steuermodus** - Binär oder Proportional über Select-Entity
-- ✅ **Proportional als Standard** - Optimiert für Fußbodenheizung
-- ✅ Proportionale Ventilsteuerung für präzise Temperaturregelung
-- ⏳ **Startup-Verbesserung** - Wartet auf MQTT/Z2M, liest alle Sensorwerte beim Start
-- 🔋 **MQTT-Abhängigkeit** - Lädt erst nach Zigbee2MQTT
-- 🔋 **Batterie-Fix** - Unterstützt `battery` und `_battery` Attribute
-- 🎯 **Intelligente Initialisierung** - Berechnet initiale Ventilöffnung statt fixer Wert
-- 📝 Dokumentation erweitert mit Steuermodus-Erklärung
+### v1.1.0 (2025-10-27) - Production Ready 🚀
+
+**Hauptfeatures:**
+- ✨ **Umschaltbarer Steuermodus** - Binär oder Proportional über Select-Entity (mit Auto-Reload)
+- ✅ **Proportional als Standard** - Optimiert für Fußbodenheizung mit stufenloser Regelung
+- 🎯 **Verkalkungsschutz Standard AN** - Automatischer Schutz ab Installation
+
+**Verbesserungen:**
+- ⏳ **MQTT Startup Wait** - Bis zu 30 Sekunden Wartezeit auf TRV-Verfügbarkeit
+- 🔋 **Sensor Auto-Detection** - Fallback für verschiedene Sensor-Namensschemas (Z2M/ZHA)
+- 🔋 **Batterie-Fix** - Unterstützt `_battery`, `battery`, `_battery_level`
+- 🎯 **Intelligente Init** - Berechnet initiale Ventilöffnung basierend auf Temperaturdifferenz
+- 📊 **Proxy-Sensoren** - Lesen direkt vom originalen TRV (universell kompatibel)
+- 🔧 **Threshold entfernt** - Jede Ventil-Änderung wird angewendet (Trägheit schützt)
+
+**Bugfixes:**
+- 🐛 Duplikat DEFAULT_HYSTERESIS entfernt
+- 🐛 Sensor Entity-ID Lookup korrigiert
+- 🐛 `_battery` Attribut priorisiert
+
+**Kompatibilität:**
+- ✅ Home Assistant 2023.1.0+
+- ✅ Zigbee2MQTT & ZHA Support
+- ✅ Umfassende Error Handling
+- ✅ Vollständige Validierung (siehe VALIDATION.md)
 
 ### v1.0.0 (2025-10-27)
 - ✅ Initial Release
