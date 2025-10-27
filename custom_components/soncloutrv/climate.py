@@ -392,7 +392,8 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
         desired_opening = self._calculate_desired_valve_opening()
         
         # Only update if significantly different (avoid micro-adjustments)
-        if abs(desired_opening - self._last_set_valve_opening) < 5:
+        # 3% threshold for proportional mode sensitivity
+        if abs(desired_opening - self._last_set_valve_opening) < 3:
             _LOGGER.debug(
                 "%s: Valve opening change too small (%d%% -> %d%%), skipping",
                 self.name,
