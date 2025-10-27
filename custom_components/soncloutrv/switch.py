@@ -60,12 +60,12 @@ class AntiCalcificationSwitch(SwitchEntity):
         """Run when entity about to be added."""
         await super().async_added_to_hass()
         
-        # Schedule weekly check (every 7 days)
+        # Schedule daily check for Sunday 3:00 AM
         if self._attr_is_on:
             self._remove_listener = async_track_time_interval(
                 self.hass,
                 self._async_check_exercise,
-                timedelta(hours=24),  # Check daily
+                timedelta(hours=1),  # Check hourly
             )
 
     async def async_will_remove_from_hass(self) -> None:
@@ -103,48 +103,67 @@ class AntiCalcificationSwitch(SwitchEntity):
         self.async_write_ha_state()
 
     async def _async_check_exercise(self, now=None) -> None:
-        """Check if valve exercise is needed."""
+        """Check if valve exercise is needed (Sundays at 3:00 AM)."""
         if not self._attr_is_on:
             return
         
-        # Exercise valve every 7 days
-        if self._last_exercise is None or (datetime.now() - self._last_exercise) >= timedelta(days=7):
-            await self._async_exercise_valve()
+        current_time = datetime.now()
+        
+        # Check if it's Sunday (weekday 6) and between 3:00-3:59 AM
+        if current_time.weekday() != 6:  # Not Sunday
+            return
+        
+        if current_time.hour != 3:  # Not 3 AM hour
+            return
+        
+        # Check if already exercised this week
+        if self._last_exercise is not None:
+            days_since_last = (current_time - self._last_exercise).days
+            if days_since_last < 7:  # Already done this week
+                return
+        
+        # Execute valve exercise
+        await self._async_exercise_valve()
 
     async def _async_exercise_valve(self) -> None:
-        """Exercise the valve to prevent calcification."""
+        """Exercise the valve to prevent calcification (5 min open, 5 min closed)."""
         # Find the climate entity
         climate_entity_id = f"climate.{self._config_entry.data['name'].lower().replace(' ', '_')}"
         
         for entity in self.hass.data[DOMAIN].get(self._config_entry.entry_id, {}).get("entities", []):
             if entity.entity_id == climate_entity_id:
-                _LOGGER.info("%s: Starting anti-calcification valve exercise", entity.name)
+                _LOGGER.info("%s: Starting anti-calcification valve exercise (Sunday 3:00 AM)", entity.name)
                 
                 try:
-                    # Save current valve position
+                    # Save current valve position and preset mode
                     original_position = entity._valve_position
+                    original_preset = entity._attr_preset_mode
                     
-                    # Step 1: Fully open (100%)
+                    _LOGGER.info("%s: Saved current state - Position: %d%%, Preset: %s", 
+                               entity.name, original_position, original_preset)
+                    
+                    # Step 1: Fully open (100%) for 5 minutes
                     await entity._async_set_valve_opening(100)
-                    _LOGGER.info("%s: Valve fully opened for exercise", entity.name)
+                    _LOGGER.info("%s: Valve fully opened (100%%) for 5 minutes", entity.name)
+                    await asyncio.sleep(300)  # 5 minutes
                     
-                    # Wait 30 seconds
-                    await asyncio.sleep(30)
-                    
-                    # Step 2: Fully close (0%)
+                    # Step 2: Fully close (0%) for 5 minutes
                     await entity._async_set_valve_opening(0)
-                    _LOGGER.info("%s: Valve fully closed for exercise", entity.name)
+                    _LOGGER.info("%s: Valve fully closed (0%%) for 5 minutes", entity.name)
+                    await asyncio.sleep(300)  # 5 minutes
                     
-                    # Wait 30 seconds
-                    await asyncio.sleep(30)
-                    
-                    # Step 3: Restore original position
+                    # Step 3: Restore original position and trigger normal control
                     await entity._async_set_valve_opening(original_position)
-                    _LOGGER.info("%s: Valve restored to %d%% after exercise", entity.name, original_position)
+                    entity._attr_preset_mode = original_preset
+                    _LOGGER.info("%s: Valve exercise complete - restored to %d%% (Preset: %s)", 
+                               entity.name, original_position, original_preset)
                     
                     # Update last exercise time
                     self._last_exercise = datetime.now()
                     self.async_write_ha_state()
+                    
+                    # Trigger normal heating control to resume
+                    await entity._async_control_heating()
                     
                 except Exception as err:
                     _LOGGER.error("%s: Error during valve exercise: %s", entity.name, err)
@@ -155,7 +174,7 @@ class AntiCalcificationSwitch(SwitchEntity):
     def extra_state_attributes(self) -> dict:
         """Return extra state attributes."""
         attrs = {
-            "description": "Automatisches Ventil-Durchbewegen alle 7 Tage zur Vermeidung von Verkalkung und Festsitzen."
+            "description": "Automatisches Ventil-Durchbewegen jeden Sonntag um 3:00 Uhr (5 Min offen, 5 Min geschlossen)."
         }
         if self._last_exercise:
             attrs["last_exercise"] = self._last_exercise.isoformat()

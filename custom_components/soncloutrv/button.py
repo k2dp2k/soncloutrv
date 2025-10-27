@@ -52,11 +52,11 @@ class ValveExerciseButton(ButtonEntity):
         
         # Entity description in attributes
         self._attr_extra_state_attributes = {
-            "description": "Führt ein sofortiges Ventil-Durchbewegen durch (100% → 0% → zurück). Dauer: ca. 1 Minute."
+            "description": "Führt ein sofortiges Ventil-Durchbewegen durch (5 Min 100%, 5 Min 0%, dann zurück). Dauer: 10 Minuten."
         }
 
     async def async_press(self) -> None:
-        """Handle button press - execute valve exercise."""
+        """Handle button press - execute valve exercise (5 min open, 5 min closed)."""
         # Find the climate entity
         climate_entity_id = f"climate.{self._config_entry.data['name'].lower().replace(' ', '_')}"
         
@@ -65,26 +65,31 @@ class ValveExerciseButton(ButtonEntity):
                 _LOGGER.info("%s: Manual valve exercise started", entity.name)
                 
                 try:
-                    # Save current valve position
+                    # Save current valve position and preset mode
                     original_position = entity._valve_position
+                    original_preset = entity._attr_preset_mode
                     
-                    # Step 1: Fully open (100%)
+                    _LOGGER.info("%s: Saved current state - Position: %d%%, Preset: %s", 
+                               entity.name, original_position, original_preset)
+                    
+                    # Step 1: Fully open (100%) for 5 minutes
                     await entity._async_set_valve_opening(100)
-                    _LOGGER.info("%s: Valve fully opened", entity.name)
+                    _LOGGER.info("%s: Valve fully opened (100%%) for 5 minutes", entity.name)
+                    await asyncio.sleep(300)  # 5 minutes
                     
-                    # Wait 30 seconds
-                    await asyncio.sleep(30)
-                    
-                    # Step 2: Fully close (0%)
+                    # Step 2: Fully close (0%) for 5 minutes
                     await entity._async_set_valve_opening(0)
-                    _LOGGER.info("%s: Valve fully closed", entity.name)
+                    _LOGGER.info("%s: Valve fully closed (0%%) for 5 minutes", entity.name)
+                    await asyncio.sleep(300)  # 5 minutes
                     
-                    # Wait 30 seconds
-                    await asyncio.sleep(30)
-                    
-                    # Step 3: Restore original position
+                    # Step 3: Restore original position and trigger normal control
                     await entity._async_set_valve_opening(original_position)
-                    _LOGGER.info("%s: Valve restored to %d%% after manual exercise", entity.name, original_position)
+                    entity._attr_preset_mode = original_preset
+                    _LOGGER.info("%s: Manual valve exercise complete - restored to %d%% (Preset: %s)", 
+                               entity.name, original_position, original_preset)
+                    
+                    # Trigger normal heating control to resume
+                    await entity._async_control_heating()
                     
                 except Exception as err:
                     _LOGGER.error("%s: Error during manual valve exercise: %s", entity.name, err)
