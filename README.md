@@ -95,7 +95,7 @@ Nach der Einrichtung werden automatisch erstellt:
 - `sensor.[name]_o_ventilposition` - Durchschnitt
 
 ### Einstellungen (Live konfigurierbar)
-- `select.[name]_steuermodus` - Binär oder Proportional
+- `select.[name]_steuermodus` - Binär oder Proportional (Standard: **Proportional**)
 - `number.[name]_hysterese` - 0,1-2,0°C (Standard: 0,5°C)
 - `number.[name]_tragheit_min_update_intervall` - 1-60 Min (Standard: 10 Min)
 
@@ -109,16 +109,16 @@ Nach der Einrichtung werden automatisch erstellt:
 
 Die Integration unterstützt zwei Steuermodi, die über `select.[name]_steuermodus` umgeschaltet werden können:
 
+**Proportional (stufenlos)** - ✅ **Standard**
+- Ventil öffnet graduell basierend auf Temperaturdifferenz
+- Bei kleiner Differenz: geringe Öffnung
+- Bei großer Differenz (>3°C): maximale Öffnung (gewählte Stufe)
+- **Optimal für Fußbodenheizung** - präzisere Temperaturregelung
+
 **Binär (An/Aus):**
 - Ventil wird entweder voll geöffnet (auf gewählte Stufe) oder komplett geschlossen
 - Einfache Steuerung, gut für sehr träge Systeme
 - Keine Zwischenwerte
-
-**Proportional (stufenlos):**
-- Ventil öffnet graduell basierend auf Temperaturdifferenz
-- Bei kleiner Differenz: geringe Öffnung
-- Bei großer Differenz (>3°C): maximale Öffnung (gewählte Stufe)
-- **Empfohlen für Fußbodenheizung** - präzisere Temperaturregelung
 
 **Beispiel Proportional-Modus:**
 ```
@@ -204,6 +204,7 @@ target:
 
 ### v1.1.0 (2025-10-27)
 - ✨ **Umschaltbarer Steuermodus** - Binär oder Proportional über Select-Entity
+- ✅ **Proportional als Standard** - Optimiert für Fußbodenheizung
 - ✅ Proportionale Ventilsteuerung für präzise Temperaturregelung
 - 📝 Dokumentation erweitert mit Steuermodus-Erklärung
 

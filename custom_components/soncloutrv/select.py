@@ -70,7 +70,7 @@ class SonClouTRVControlModeSelect(SelectEntity):
         
         # Current value
         self._attr_current_option = config_entry.data.get(
-            "control_mode", CONTROL_MODE_BINARY
+            "control_mode", CONTROL_MODE_PROPORTIONAL
         )
 
     async def async_select_option(self, option: str) -> None:

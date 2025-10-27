@@ -65,7 +65,7 @@ Nach der Einrichtung werden pro Thermostat folgende Entities erstellt:
 - `sensor.trv_[name]_o_ventilposition` - Durchschnittliche Ventilposition
 
 ### Einstellungen
-- `select.trv_[name]_steuermodus` - Steuermodus (binär/proportional)
+- `select.trv_[name]_steuermodus` - Steuermodus (Standard: **proportional**)
 - `number.trv_[name]_hysterese` - Hysterese einstellen (0,1 - 2,0°C)
 - `number.trv_[name]_tragheit_min_update_intervall` - Update-Intervall (1-60 Min)
 
@@ -77,15 +77,15 @@ Nach der Einrichtung werden pro Thermostat folgende Entities erstellt:
 
 ### Steuermodus
 
-**Binär (An/Aus):**
-- Ventil wird voll geöffnet oder komplett geschlossen
-- Keine Zwischenwerte
-
-**Proportional (stufenlos):**
+**Proportional (stufenlos)** - ✅ **Standard**
 - Ventil öffnet graduell basierend auf Temperaturdifferenz
 - Bei 1,5°C Differenz und Stufe 2: ~19% Öffnung
 - Bei >3°C Differenz: Maximale Öffnung (gewählte Stufe)
-- **Empfohlen für Fußbodenheizung**
+- **Optimal für Fußbodenheizung**
+
+**Binär (An/Aus):**
+- Ventil wird voll geöffnet oder komplett geschlossen
+- Keine Zwischenwerte
 
 ### Preset-Modi (Ventilöffnungsstufen)
 
@@ -171,6 +171,7 @@ cards:
 
 ### v1.1.0
 - ✨ Umschaltbarer Steuermodus (binär/proportional)
+- ✅ **Proportional als Standard** - Optimiert für Fußbodenheizung
 - ✅ Proportionale Ventilsteuerung für präzise Regelung
 - 📝 Erweiterte Dokumentation
 
