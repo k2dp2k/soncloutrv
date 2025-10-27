@@ -93,6 +93,7 @@ Nach der Einrichtung werden automatisch erstellt:
 - `sensor.[name]_trv_batterie` - Batteriestand
 - `sensor.[name]_temperaturdifferenz` - Soll/Ist Differenz
 - `sensor.[name]_o_ventilposition` - Durchschnitt
+- `sensor.[name]_aktuelle_stufe` - Gewählte Stufe (*, 1-5)
 
 ### Einstellungen (Live konfigurierbar)
 - `select.[name]_steuermodus` - Binär oder Proportional (Standard: **Proportional**)

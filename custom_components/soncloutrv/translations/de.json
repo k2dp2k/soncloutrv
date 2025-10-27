@@ -29,6 +29,10 @@
       "average_valve_position": {
         "name": "Ø Ventilposition",
         "state": "Durchschnittliche Ventilöffnung der letzten 10 Anpassungen."
+      },
+      "preset_mode": {
+        "name": "Aktuelle Stufe",
+        "state": "Aktuell gewählte Ventilöffnungsstufe (* = 0%, 1 = 20%, 2 = 40%, 3 = 60%, 4 = 80%, 5 = 100%)."
       }
     },
     "number": {

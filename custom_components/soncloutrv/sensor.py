@@ -90,6 +90,18 @@ async def async_setup_entry(
             None,
             "Durchschnittliche Ventilöffnung der letzten 10 Anpassungen.",
         ),
+        SonClouTRVSensor(
+            hass,
+            config_entry,
+            climate_entity_id,
+            "preset_mode",
+            "Aktuelle Stufe",
+            None,
+            "mdi:numeric",
+            None,
+            None,
+            "Aktuell gewählte Ventilöffnungsstufe (* = 0%, 1-5 = 20%-100%).",
+        ),
     ]
     
     async_add_entities(sensors, True)

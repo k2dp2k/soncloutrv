@@ -63,6 +63,7 @@ Nach der Einrichtung werden pro Thermostat folgende Entities erstellt:
 - `sensor.trv_[name]_trv_batterie` - Batteriestand des TRV
 - `sensor.trv_[name]_temperaturdifferenz` - Differenz Soll/Ist
 - `sensor.trv_[name]_o_ventilposition` - Durchschnittliche Ventilposition
+- `sensor.trv_[name]_aktuelle_stufe` - Gewählte Stufe (*, 1-5)
 
 ### Einstellungen
 - `select.trv_[name]_steuermodus` - Steuermodus (Standard: **proportional**)
