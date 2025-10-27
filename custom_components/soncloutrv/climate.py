@@ -304,9 +304,9 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
                     self._valve_position = int(attributes["valve_position"])
                 
                 # Read battery and internal temperature
-                # Battery can be in 'battery' or '_battery' attribute
-                for battery_attr in ["battery", "_battery"]:
-                    if battery_attr in attributes:
+                # Battery can be in '_battery' or 'battery' attribute (prefer _battery)
+                for battery_attr in ["_battery", "battery"]:
+                    if battery_attr in attributes and attributes[battery_attr] is not None:
                         battery_value = attributes[battery_attr]
                         # Handle both numeric and string values
                         if isinstance(battery_value, (int, float)):
@@ -338,8 +338,9 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
             attributes = trv_state.attributes
             
             # Read battery (can be numeric or with % symbol)
-            for battery_attr in ["battery", "_battery"]:
-                if battery_attr in attributes:
+            # Prefer _battery over battery
+            for battery_attr in ["_battery", "battery"]:
+                if battery_attr in attributes and attributes[battery_attr] is not None:
                     battery_value = attributes[battery_attr]
                     # Handle both numeric and string values
                     if isinstance(battery_value, (int, float)):
@@ -447,8 +448,8 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
                         self._trv_internal_temp = float(temp)
                         break
                 
-                # Capture battery level (can be 'battery' or '_battery')
-                self._trv_battery = trv_state.attributes.get("battery") or trv_state.attributes.get("_battery")
+                # Capture battery level (prefer '_battery' over 'battery')
+                self._trv_battery = trv_state.attributes.get("_battery") or trv_state.attributes.get("battery")
             
             device_id = self._valve_entity.replace("climate.", "")
             
