@@ -1,6 +1,6 @@
 {
   "domain": "soncloutrv",
-  "name": "SonTRV - Smart Thermostat Control",
+  "name": "SonTRV - Flächenheizung (Radiant Floor Heating Control)",
   "codeowners": ["@k2dp2k"],
   "config_flow": true,
   "documentation": "https://github.com/k2dp2k/soncloutrv",

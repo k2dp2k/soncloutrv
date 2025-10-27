@@ -5,7 +5,8 @@
 </p>
 
 <p align="center">
-  <strong>Intelligente Steuerung für SONOFF TRVZB Thermostate mit externer Temperaturmessung</strong>
+  <strong>Intelligente Thermostatsteuerung speziell für Flächenheizungen (Fußbodenheizung)</strong><br/>
+  <em>Optimiert für träge Heizsysteme mit SONOFF TRVZB und externen Temperatursensoren</em>
 </p>
 
 ---
@@ -14,7 +15,7 @@
 
 - ✅ **Externe Temperatursensoren** - Nutze präzise Raumtemperatursensoren statt der eingebauten TRV-Sensoren
 - 🎯 **Intelligente Hysterese** - Verhindert ständiges Ein-/Ausschalten durch konfigurierbare Hysterese
-- ⏱️ **Trägheitssteuerung** - Optimiert für Fußbodenheizung mit einstellbaren Update-Intervallen
+- ⏱️ **Trägheitssteuerung** - Speziell für träge Flächenheizungssysteme (Fußbodenheizung) mit langen Reaktionszeiten
 - 📊 **5 Ventilöffnungsstufen** - Präzise Kontrolle der Heizleistung (0%, 20%, 40%, 60%, 80%, 100%)
 - 🛡️ **Verkalkungsschutz** - Automatisches Ventil-Durchbewegen alle 7 Tage
 - 📈 **Umfangreiche Sensoren** - Ventilposition, Batteriestand, Temperaturdifferenz, und mehr

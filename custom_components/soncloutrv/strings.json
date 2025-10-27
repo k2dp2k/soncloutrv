@@ -1,10 +1,10 @@
 {
-  "title": "SonTRV - Smart Thermostat Control",
+  "title": "SonTRV - Flächenheizung (Radiant Floor Heating)",
   "config": {
     "step": {
       "user": {
-        "title": "SonClouTRV einrichten",
-        "description": "Konfigurieren Sie Ihr SONOFF TRVZB Thermostat",
+        "title": "SonTRV Flächenheizung einrichten",
+        "description": "Konfigurieren Sie Ihr SONOFF TRVZB Thermostat für Fußbodenheizung",
         "data": {
           "name": "Name",
           "valve_entity": "SONOFF TRVZB Thermostat (climate)",

@@ -111,8 +111,8 @@
   "config": {
     "step": {
       "user": {
-        "title": "SonClouTRV einrichten",
-        "description": "Konfigurieren Sie Ihr SONOFF TRVZB Thermostat",
+        "title": "SonTRV Flächenheizung einrichten",
+        "description": "Konfigurieren Sie Ihr SONOFF TRVZB Thermostat für Fußbodenheizung (Flächenheizung)",
         "data": {
           "name": "Name",
           "valve_entity": "SONOFF TRVZB Thermostat (climate)",
@@ -135,7 +135,7 @@
   "options": {
     "step": {
       "init": {
-        "title": "SonClouTRV Optionen",
+        "title": "SonTRV Flächenheizung Optionen",
         "description": "Passen Sie die Einstellungen an",
         "data": {
           "min_temp": "Minimale Temperatur",

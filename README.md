@@ -6,13 +6,13 @@
 
 ## Projektbeschreibung
 
-SonTRV ist eine Home Assistant Custom Integration für intelligente Thermostatsteuerung mit SONOFF TRVZB. Die Integration bietet erweiterte Funktionen wie externe Temperatursensoren, 5-Stufen-Ventilsteuerung, Verkalkungsschutz und konfigurierbare Hysterese/Trägheit.
+SonTRV ist eine Home Assistant Custom Integration **speziell für Flächenheizungen (Fußbodenheizung)** mit SONOFF TRVZB Thermostaten. Die Integration berücksichtigt die Trägheit von Flächenheizungssystemen und bietet erweiterte Funktionen wie externe Temperatursensoren, 5-Stufen-Ventilsteuerung, intelligente Hysterese und automatischen Verkalkungsschutz.
 
 ## 🌟 Features
 
 - ✅ **Externe Temperatursensoren** - Präzise Raumtemperaturmessung statt TRV-interner Sensoren
 - 🎯 **Intelligente Hysterese** - Verhindert ständiges Schalten (konfigurierbar: 0,1-2,0°C)
-- ⏱️ **Trägheitssteuerung** - Optimiert für Fußbodenheizung (1-60 Min einstellbar)
+- ⏱️ **Trägheitssteuerung** - Speziell für träge Flächenheizungssysteme optimiert (1-60 Min einstellbar)
 - 📊 **5 Ventilöffnungsstufen** - Präzise Kontrolle: 0%, 20%, 40%, 60%, 80%, 100%
 - 🛡️ **Verkalkungsschutz** - Automatisches Ventil-Durchbewegen alle 7 Tage
 - 📈 **Umfangreiche Sensoren** - Ventilposition, Batterie, Temperaturdifferenz, Durchschnitt
