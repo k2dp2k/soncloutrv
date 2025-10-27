@@ -307,7 +307,15 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
                 # Battery can be in 'battery' or '_battery' attribute
                 for battery_attr in ["battery", "_battery"]:
                     if battery_attr in attributes:
-                        self._trv_battery = attributes[battery_attr]
+                        battery_value = attributes[battery_attr]
+                        # Handle both numeric and string values
+                        if isinstance(battery_value, (int, float)):
+                            self._trv_battery = battery_value
+                        elif isinstance(battery_value, str):
+                            try:
+                                self._trv_battery = float(battery_value.replace("%", "").strip())
+                            except ValueError:
+                                pass
                         break
                 
                 for attr_name in ["local_temperature", "current_temperature", "temperature"]:
@@ -329,10 +337,20 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
         if trv_state and trv_state.state not in (STATE_UNAVAILABLE, STATE_UNKNOWN):
             attributes = trv_state.attributes
             
-            # Read battery
+            # Read battery (can be numeric or with % symbol)
             for battery_attr in ["battery", "_battery"]:
                 if battery_attr in attributes:
-                    self._trv_battery = attributes[battery_attr]
+                    battery_value = attributes[battery_attr]
+                    # Handle both numeric and string values
+                    if isinstance(battery_value, (int, float)):
+                        self._trv_battery = battery_value
+                    elif isinstance(battery_value, str):
+                        # Remove % symbol if present
+                        try:
+                            self._trv_battery = float(battery_value.replace("%", "").strip())
+                        except ValueError:
+                            _LOGGER.warning("%s: Could not parse battery value: %s", self.name, battery_value)
+                            continue
                     _LOGGER.info("%s: Initial battery level: %s%%", self.name, self._trv_battery)
                     break
             
@@ -391,13 +409,11 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
         # Calculate desired valve opening based on temperature difference
         desired_opening = self._calculate_desired_valve_opening()
         
-        # Only update if significantly different (avoid micro-adjustments)
-        # 3% threshold for proportional mode sensitivity
-        if abs(desired_opening - self._last_set_valve_opening) < 3:
+        # Only update if actually different (already protected by inertia/min_cycle)
+        if desired_opening == self._last_set_valve_opening:
             _LOGGER.debug(
-                "%s: Valve opening change too small (%d%% -> %d%%), skipping",
+                "%s: Valve opening unchanged at %d%%, skipping",
                 self.name,
-                self._last_set_valve_opening,
                 desired_opening,
             )
             self.async_write_ha_state()
