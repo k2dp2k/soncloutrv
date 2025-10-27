@@ -1,120 +1,190 @@
-# Home Assistant Fußbodenheizung - Fehleranalyse
+# SonTRV - Smart Thermostat Control
+
+<p align="center">
+  <img src="custom_components/soncloutrv/icon.png" alt="SonTRV Logo" width="200"/>
+</p>
 
 ## Projektbeschreibung
 
-Dieses Projekt enthält eine detaillierte Analyse der Home Assistant Konfiguration für eine Fußbodenheizungssteuerung. Die Analyse fokussiert sich auf das Auffinden von Fehlern, Inkonsistenzen und Verbesserungspotential.
+SonTRV ist eine Home Assistant Custom Integration für intelligente Thermostatsteuerung mit SONOFF TRVZB. Die Integration bietet erweiterte Funktionen wie externe Temperatursensoren, 5-Stufen-Ventilsteuerung, Verkalkungsschutz und konfigurierbare Hysterese/Trägheit.
+
+## 🌟 Features
+
+- ✅ **Externe Temperatursensoren** - Präzise Raumtemperaturmessung statt TRV-interner Sensoren
+- 🎯 **Intelligente Hysterese** - Verhindert ständiges Schalten (konfigurierbar: 0,1-2,0°C)
+- ⏱️ **Trägheitssteuerung** - Optimiert für Fußbodenheizung (1-60 Min einstellbar)
+- 📊 **5 Ventilöffnungsstufen** - Präzise Kontrolle: 0%, 20%, 40%, 60%, 80%, 100%
+- 🛡️ **Verkalkungsschutz** - Automatisches Ventil-Durchbewegen alle 7 Tage
+- 📈 **Umfangreiche Sensoren** - Ventilposition, Batterie, Temperaturdifferenz, Durchschnitt
+- 🔧 **Live-Konfiguration** - Alle Parameter über die UI anpassbar
+- 🇩🇪 **Vollständige deutsche Übersetzung**
 
 ## Projektstruktur
 
 ```
 homeassistant-heating-analysis/
 ├── README.md                           # Diese Datei
-├── FEHLERANALYSE.md                    # Detaillierte Fehleranalyse
-├── original/                           # Original YAML-Dateien
-│   ├── fussboden_dashboard_neu.yaml   # Dashboard-Konfiguration
-│   └── fussboden_heizung.yaml         # Package mit Entities & Automationen
-└── validate_config.py                  # Python-Script zur YAML-Validierung
+├── custom_components/
+│   └── soncloutrv/                    # SonTRV Integration
+│       ├── __init__.py
+│       ├── manifest.json
+│       ├── config_flow.py
+│       ├── climate.py                 # Hauptthermostat
+│       ├── sensor.py                  # 5 Sensoren pro Thermostat
+│       ├── number.py                  # Hysterese & Trägheit
+│       ├── switch.py                  # Verkalkungsschutz
+│       ├── button.py                  # Manuelles Durchbewegen
+│       ├── translations/              # DE & EN Übersetzungen
+│       └── README.md                  # Detaillierte Dokumentation
+├── original/                          # Original YAML-Dateien (Archiv)
+└── validate_config.py                 # Legacy Validierungs-Script
 ```
 
-## Analysierte Dateien
+## 📦 Installation
 
-### 1. fussboden_dashboard_neu.yaml
-Lovelace Dashboard für die Fußbodenheizung mit:
-- Globalen Einstellungen (Max. Stufe, Hysterese, Zeitsteuerung)
-- Thermostaten für 6 Räume (Bad, Büro, Flur, Küche, Schlafzimmer, Wohnzimmer)
-- Schnellszenen (Komfort, Eco, Nacht, Aus)
-- System-Status Anzeige
+### Über HACS (empfohlen)
 
-### 2. fussboden_heizung.yaml
-Home Assistant Package mit:
-- Input Helper (Number, DateTime, Boolean, Select)
-- Template Sensoren
-- Generic Thermostat Konfigurationen
-- Dummy Switches
-- Automationen für Ventilsteuerung
-- Sync-Automationen zwischen Thermostat und Input Number
-- Anti-Verkalkung Automation
-- Scripts für Szenen
+1. Öffne HACS in Home Assistant
+2. Gehe zu "Integrationen"
+3. Klicke auf die drei Punkte → "Benutzerdefinierte Repositories"
+4. Füge hinzu: `https://github.com/k2dp2k/soncloutrv` (Kategorie: Integration)
+5. Suche nach "SonTRV" und installiere es
+6. **Starte Home Assistant neu**
+7. Gehe zu Einstellungen → Geräte & Dienste → Integration hinzufügen → "SonTRV"
 
-## Gefundene Fehler
+### Manuell
 
-### Kritische Fehler
-- ❌ **YAML Syntax-Fehler** im Dashboard (falsche Einrückung)
-- ❌ **Fehlende Entity** `input_number.fussbodenheizung_druck`
+1. Kopiere den Ordner `custom_components/soncloutrv` in dein `config/custom_components/` Verzeichnis
+2. Starte Home Assistant neu
+3. Füge die Integration über die UI hinzu
 
-### Warnungen
-- ⚠️ Doppelte Sensor-Verwendung (Küche & Wohnzimmer)
-- ⚠️ Binäre Ventilsteuerung ohne Proportionalität
-- ⚠️ Ungenutzte Input Select Helper
+## ⚙️ Einrichtung
 
-Siehe [FEHLERANALYSE.md](./FEHLERANALYSE.md) für Details.
+1. Gehe zu **Einstellungen** → **Geräte & Dienste** → **Integration hinzufügen**
+2. Suche nach **"SonTRV"**
+3. Folge dem Setup-Assistenten:
+   - **Name:** Beliebiger Name (z.B. "TRV_Bad", "TRV_Wohnzimmer")
+   - **SONOFF TRVZB Entity:** Wähle dein `climate.heizung_*_fussboden` Entity
+   - **Temperatursensor:** Wähle deinen externen Sensor (z.B. `sensor.temperatur_badezimmer`)
+   - **Temperaturbereich:** Min/Max Temperatur festlegen
+   - **Zieltemperatur:** Standard-Solltemperatur
+   - **Ventilöffnungsstufe:** Wähle zwischen * (0%), 1-5 (20%-100%)
 
-## System-Übersicht
+4. **Wiederhole** für jeden Raum/Thermostat
 
-### Unterstützte Räume
-1. **Bad** 🚿
-   - Sensor: `sensor.temperatur_badezimmer_temperature`
-   - Ventil: `number.heizung_bad_fussboden_valve_closing_degree`
+## 🎛️ Erstellte Entities pro Thermostat
 
-2. **Büro** 💼
-   - Sensor: `sensor.sbht_003c_a7e0_temperature`
-   - Ventil: `number.heizung_buro_fussboden_valve_closing_degree`
+Nach der Einrichtung werden automatisch erstellt:
 
-3. **Flur** 🚪
-   - Sensor: `sensor.indoor_outdoor_meter_280f`
-   - Ventil: `number.heizung_flur_fussboden_valve_closing_degree`
+### Haupt-Thermostat
+- `climate.sontrv_[name]` - Steuerung mit Preset-Modi
 
-4. **Küche** 🍳
-   - Sensor: `sensor.temp_wohnzimmer_sb` ⚠️ (geteilt mit Wohnzimmer)
-   - Ventil: `number.heizung_kuche_fussboden_valve_closing_degree`
+### Sensoren (automatisch)
+- `sensor.[name]_ventilposition` - Aktuelle Öffnung (0-100%)
+- `sensor.[name]_trv_temperatur` - TRV interne Temperatur
+- `sensor.[name]_trv_batterie` - Batteriestand
+- `sensor.[name]_temperaturdifferenz` - Soll/Ist Differenz
+- `sensor.[name]_o_ventilposition` - Durchschnitt
 
-5. **Schlafzimmer** 🛏️
-   - Sensor: `sensor.temperatur_schlaf_temperature`
-   - Ventil: `number.heizung_schlafzimmer_fussboden_valve_closing_degree`
+### Einstellungen (Live konfigurierbar)
+- `number.[name]_hysterese` - 0,1-2,0°C (Standard: 0,5°C)
+- `number.[name]_tragheit_min_update_intervall` - 1-60 Min (Standard: 10 Min)
 
-6. **Wohnzimmer** 🛋️
-   - Sensor: `sensor.temp_wohnzimmer_sb` ⚠️ (geteilt mit Küche)
-   - Ventil: `number.heizung_wohnzimmer_fussboden_valve_closing_degree`
+### Verkalkungsschutz
+- `switch.[name]_verkalkungsschutz` - Auto-Durchbewegen alle 7 Tage
+- `button.[name]_ventil_durchbewegen` - Manuelles Durchbewegen
 
-### Features
-- ⚙️ Globale Einstellungen (Hysterese, Max. Öffnungs-Stufe)
-- ⏰ Zeitsteuerung mit Start/Ende-Zeit
-- 🎯 Szenen: Komfort (22°C), Eco (18°C), Nacht, Aus
-- 🔄 Anti-Verkalkung (Wöchentlich Sonntag 03:00)
-- 📊 Ventil-Position für jeden Raum
-- 🔁 Bidirektionale Sync zwischen UI und Thermostat
+## 🔧 Konfiguration
 
-## Validierung
+### Preset-Modi (Ventilöffnungsstufen)
 
-### YAML Syntax prüfen
-```bash
-python3 validate_config.py
+| Preset | Öffnung | Verwendung |
+|--------|---------|------------|
+| **\*** | 0% | Ventil geschlossen / Aus |
+| **1** | 20% | Minimale Heizleistung |
+| **2** | 40% | Niedrige Heizleistung |
+| **3** | 60% | Mittlere Heizleistung |
+| **4** | 80% | Standard für Fußbodenheizung |
+| **5** | 100% | Maximale Heizleistung |
+
+### Empfohlene Einstellungen
+
+**Fußbodenheizung:**
+- Hysterese: 0,5-0,7°C
+- Trägheit: 15-20 Minuten
+- Max. Stufe: 4 (80%)
+
+**Heizkörper:**
+- Hysterese: 0,3-0,5°C
+- Trägheit: 5-10 Minuten
+- Max. Stufe: 5 (100%)
+
+## 🤝 Unterstützte Hardware
+- **SONOFF TRVZB** (via Zigbee2MQTT oder ZHA)
+- Jeder Zigbee/MQTT-fähige TRV mit:
+  - `valve_opening_degree` Unterstützung
+  - `external_temperature_input` Unterstützung
+
+## 📚 Dokumentation
+
+- **[Integration README](custom_components/soncloutrv/README.md)** - Ausführliche Dokumentation
+- **[FEHLERANALYSE.md](FEHLERANALYSE.md)** - Analyse der originalen YAML-Konfiguration (Archiv)
+
+## 🔧 Services
+
+### `soncloutrv.calibrate_valve`
+
+Führt eine manuelle Ventil-Kalibrierung durch.
+
+```yaml
+service: soncloutrv.calibrate_valve
+target:
+  entity_id: climate.sontrv_bad
 ```
 
-### Home Assistant Config Check
-```bash
-# Lokal
-ha core check
+## 🐛 Troubleshooting
 
-# Im Docker Container
-docker exec homeassistant python -m homeassistant --script check_config -c /config
-```
+**Ventil reagiert nicht:**
+- Prüfe, ob die TRV-Entity korrekt ausgewählt wurde
+- Stelle sicher, dass `number.*_valve_opening_degree` existiert
 
-## Empfohlene Nächste Schritte
+**Temperatur wird nicht übernommen:**
+- Prüfe, ob der externe Sensor funktioniert
+- Schaue im Log nach "Set external temperature" Meldungen
 
-1. ✅ Fehleranalyse durchgelesen → **FEHLERANALYSE.md**
-2. 🔧 YAML-Syntax-Fehler beheben (Dashboard)
-3. 🔧 Fehlende Entity hinzufügen oder Automation deaktivieren
-4. 🔍 Separate Sensoren für Küche/Wohnzimmer evaluieren
-5. 💡 Proportionale Ventilsteuerung implementieren (optional)
+**Verkalkungsschutz funktioniert nicht:**
+- Aktiviere den Switch `switch.*_verkalkungsschutz`
+- Der erste Durchlauf erfolgt 7 Tage nach Aktivierung
 
-## Home Assistant Version
+## 📄 Changelog
 
-Diese Konfiguration wurde analysiert für:
-- Home Assistant Core
-- Lovelace Dashboard
-- Generic Thermostat Integration
+### v1.0.0 (2025-10-27)
+- ✅ Initial Release
+- ✅ Externe Temperatursensoren
+- ✅ 5-Stufen Ventilsteuerung
+- ✅ Verkalkungsschutz
+- ✅ Live-Konfiguration (Hysterese, Trägheit)
+- ✅ Umfangreiche Sensoren
+- ✅ Vollständige DE/EN Übersetzungen
 
-## Lizenz
+## 👤 Autor
 
-Dieses Projekt ist eine Analyse der bestehenden Konfiguration und dient ausschließlich zu Dokumentationszwecken.
+**k2dp2k**
+- GitHub: [@k2dp2k](https://github.com/k2dp2k)
+- Repository: [soncloutrv](https://github.com/k2dp2k/soncloutrv)
+
+## 💬 Support
+
+Bei Fragen oder Problemen:
+- 🐛 [Issues auf GitHub](https://github.com/k2dp2k/soncloutrv/issues)
+- 📝 [Discussions auf GitHub](https://github.com/k2dp2k/soncloutrv/discussions)
+
+## 📝 Lizenz
+
+MIT License - siehe LICENSE Datei
+
+---
+
+<p align="center">
+  Made with ❤️ for Home Assistant
+</p>
