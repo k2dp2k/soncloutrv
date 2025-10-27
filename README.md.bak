@@ -13,7 +13,6 @@ SonTRV ist eine Home Assistant Custom Integration **speziell für Flächenheizun
 - ✅ **Externe Temperatursensoren** - Präzise Raumtemperaturmessung statt TRV-interner Sensoren
 - 🎯 **Intelligente Hysterese** - Verhindert ständiges Schalten (konfigurierbar: 0,1-2,0°C)
 - ⏱️ **Trägheitssteuerung** - Speziell für träge Flächenheizungssysteme optimiert (1-60 Min einstellbar)
-- 🔄 **Umschaltbarer Steuermodus** - Binär (An/Aus) oder Proportional (stufenlos)
 - 📊 **5 Ventilöffnungsstufen** - Präzise Kontrolle: 0%, 20%, 40%, 60%, 80%, 100%
 - 🛡️ **Verkalkungsschutz** - Automatisches Ventil-Durchbewegen alle 7 Tage
 - 📈 **Umfangreiche Sensoren** - Ventilposition, Batterie, Temperaturdifferenz, Durchschnitt
@@ -37,7 +36,6 @@ homeassistant-heating-analysis/
 │       ├── number.py                  # Hysterese & Trägheit
 │       ├── switch.py                  # Verkalkungsschutz
 │       ├── button.py                  # Manuelles Durchbewegen
-│       ├── select.py                  # Steuermodus-Auswahl
 │       ├── translations/              # DE & EN Übersetzungen
 │       ├── icon.png                   # Integration Icon
 │       └── README.md                  # Detaillierte Dokumentation
@@ -105,31 +103,6 @@ Nach der Einrichtung werden automatisch erstellt:
 
 ## 🔧 Konfiguration
 
-### Steuermodus
-
-Die Integration unterstützt zwei Steuermodi, die über `select.[name]_steuermodus` umgeschaltet werden können:
-
-**Binär (An/Aus):**
-- Ventil wird entweder voll geöffnet (auf gewählte Stufe) oder komplett geschlossen
-- Einfache Steuerung, gut für sehr träge Systeme
-- Keine Zwischenwerte
-
-**Proportional (stufenlos):**
-- Ventil öffnet graduell basierend auf Temperaturdifferenz
-- Bei kleiner Differenz: geringe Öffnung
-- Bei großer Differenz (>3°C): maximale Öffnung (gewählte Stufe)
-- **Empfohlen für Fußbodenheizung** - präzisere Temperaturregelung
-
-**Beispiel Proportional-Modus:**
-```
-Zieltemperatur: 22°C
-Aktuelle Temperatur: 20,5°C
-Differenz: 1,5°C
-Gewählte Stufe: 2 (40% max)
-
-→ Ventilöffnung: ~19% (proportional zur Differenz)
-```
-
 ### Preset-Modi (Ventilöffnungsstufen)
 
 | Preset | Öffnung | Verwendung |
@@ -144,13 +117,11 @@ Gewählte Stufe: 2 (40% max)
 ### Empfohlene Einstellungen
 
 **Fußbodenheizung:**
-- Steuermodus: **Proportional**
 - Hysterese: 0,5-0,7°C
 - Trägheit: 15-20 Minuten
 - Max. Stufe: 4 (80%)
 
 **Heizkörper:**
-- Steuermodus: **Proportional** oder Binär
 - Hysterese: 0,3-0,5°C
 - Trägheit: 5-10 Minuten
 - Max. Stufe: 5 (100%)
@@ -183,11 +154,6 @@ target:
 
 ## 🐛 Troubleshooting
 
-**Ventil öffnet nur wenig trotz großer Temperaturdifferenz:**
-- Prüfe den **Steuermodus**: `select.[name]_steuermodus`
-- Setze auf **"proportional"** für stufenlose Regelung
-- Im **Binär-Modus** öffnet das Ventil nur voll oder gar nicht
-
 **Ventil reagiert nicht:**
 - Prüfe, ob die TRV-Entity korrekt ausgewählt wurde
 - Stelle sicher, dass `number.*_valve_opening_degree` existiert
@@ -201,11 +167,6 @@ target:
 - Der erste Durchlauf erfolgt 7 Tage nach Aktivierung
 
 ## 📄 Changelog
-
-### v1.1.0 (2025-10-27)
-- ✨ **Umschaltbarer Steuermodus** - Binär oder Proportional über Select-Entity
-- ✅ Proportionale Ventilsteuerung für präzise Temperaturregelung
-- 📝 Dokumentation erweitert mit Steuermodus-Erklärung
 
 ### v1.0.0 (2025-10-27)
 - ✅ Initial Release

@@ -16,10 +16,11 @@
 - ✅ **Externe Temperatursensoren** - Nutze präzise Raumtemperatursensoren statt der eingebauten TRV-Sensoren
 - 🎯 **Intelligente Hysterese** - Verhindert ständiges Ein-/Ausschalten durch konfigurierbare Hysterese
 - ⏱️ **Trägheitssteuerung** - Speziell für träge Flächenheizungssysteme (Fußbodenheizung) mit langen Reaktionszeiten
+- 🔄 **Umschaltbarer Steuermodus** - Binär (An/Aus) oder Proportional (stufenlos) über Select-Entity
 - 📊 **5 Ventilöffnungsstufen** - Präzise Kontrolle der Heizleistung (0%, 20%, 40%, 60%, 80%, 100%)
 - 🛡️ **Verkalkungsschutz** - Automatisches Ventil-Durchbewegen alle 7 Tage
 - 📈 **Umfangreiche Sensoren** - Ventilposition, Batteriestand, Temperaturdifferenz, und mehr
-- 🔧 **Live-Konfiguration** - Hysterese und Trägheit über Number-Entities anpassbar
+- 🔧 **Live-Konfiguration** - Hysterese, Trägheit und Steuermodus über die UI anpassbar
 
 ## 📦 Installation
 
@@ -64,6 +65,7 @@ Nach der Einrichtung werden pro Thermostat folgende Entities erstellt:
 - `sensor.trv_[name]_o_ventilposition` - Durchschnittliche Ventilposition
 
 ### Einstellungen
+- `select.trv_[name]_steuermodus` - Steuermodus (binär/proportional)
 - `number.trv_[name]_hysterese` - Hysterese einstellen (0,1 - 2,0°C)
 - `number.trv_[name]_tragheit_min_update_intervall` - Update-Intervall (1-60 Min)
 
@@ -72,6 +74,18 @@ Nach der Einrichtung werden pro Thermostat folgende Entities erstellt:
 - `button.trv_[name]_ventil_durchbewegen` - Manuelles Durchbewegen
 
 ## 🔧 Konfiguration
+
+### Steuermodus
+
+**Binär (An/Aus):**
+- Ventil wird voll geöffnet oder komplett geschlossen
+- Keine Zwischenwerte
+
+**Proportional (stufenlos):**
+- Ventil öffnet graduell basierend auf Temperaturdifferenz
+- Bei 1,5°C Differenz und Stufe 2: ~19% Öffnung
+- Bei >3°C Differenz: Maximale Öffnung (gewählte Stufe)
+- **Empfohlen für Fußbodenheizung**
 
 ### Preset-Modi (Ventilöffnungsstufen)
 
@@ -93,6 +107,13 @@ Die Hysterese verhindert ständiges Schalten bei kleinen Temperaturschwankungen:
 Minimale Zeit zwischen Ventil-Anpassungen:
 - **Standard:** 10 Minuten
 - **Empfehlung:** 10-20 Minuten für Fußbodenheizung, 5 Minuten für Heizkörper
+
+### Empfohlene Kombination für Fußbodenheizung
+
+- **Steuermodus:** Proportional
+- **Hysterese:** 0,5-0,7°C
+- **Trägheit:** 15-20 Minuten
+- **Max. Stufe:** 4 (80%)
 
 ## 🛠️ Services
 
@@ -118,6 +139,7 @@ cards:
       - sensor.trv_bad_ventilposition
       - sensor.trv_bad_trv_batterie
       - sensor.trv_bad_temperaturdifferenz
+      - select.trv_bad_steuermodus
       - number.trv_bad_hysterese
       - number.trv_bad_tragheit_min_update_intervall
       - switch.trv_bad_verkalkungsschutz
@@ -146,6 +168,11 @@ cards:
 - Der erste Durchlauf erfolgt 7 Tage nach Aktivierung
 
 ## 📝 Changelog
+
+### v1.1.0
+- ✨ Umschaltbarer Steuermodus (binär/proportional)
+- ✅ Proportionale Ventilsteuerung für präzise Regelung
+- 📝 Erweiterte Dokumentation
 
 ### v1.0.0
 - Initial Release
