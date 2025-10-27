@@ -26,8 +26,9 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     """Set up SonClouTRV sensor platform."""
-    # Find the climate entity
-    climate_entity_id = f"climate.{config_entry.data['name'].lower().replace(' ', '_')}"
+    # Find the climate entity - use the correct entity_id with sontrv prefix
+    name_slug = config_entry.data['name'].lower().replace(' ', '_')
+    climate_entity_id = f"climate.sontrv_{name_slug}"
     
     sensors = [
         SonClouTRVSensor(
