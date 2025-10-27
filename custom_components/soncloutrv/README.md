@@ -19,7 +19,9 @@
 - 🔄 **Umschaltbarer Steuermodus** - Binär (An/Aus) oder Proportional (stufenlos) über Select-Entity
 - 📊 **5 Ventilöffnungsstufen** - Präzise Kontrolle der Heizleistung (0%, 20%, 40%, 60%, 80%, 100%)
 - 🛡️ **Verkalkungsschutz** - Automatisches Ventil-Durchbewegen alle 7 Tage
-- 📈 **Umfangreiche Sensoren** - Ventilposition, Batteriestand, Temperaturdifferenz, und mehr
+- ⚡ **17 Advanced Sensors** ✨ *NEU in v1.2.0* - Energie, Effizienz, Wartung, Temperatur-Trends, Warnungen
+- 📈 **Energie-Tracking** - Geschätzter Verbrauch in kWh mit Home Assistant Energy Dashboard Integration
+- 🔔 **Intelligente Warnungen** - Überhitzung, Unterheizung, Verkalkung, Batterie-Status
 - 🔧 **Live-Konfiguration** - Hysterese, Trägheit und Steuermodus über die UI anpassbar
 
 ## 📦 Installation
@@ -57,13 +59,41 @@ Nach der Einrichtung werden pro Thermostat folgende Entities erstellt:
 ### Climate Entity
 - `climate.trv_[name]` - Haupt-Thermostat mit Temperatursteuerung
 
-### Sensoren
+### Basis-Sensoren
 - `sensor.trv_[name]_ventilposition` - Aktuelle Ventilöffnung (%)
 - `sensor.trv_[name]_trv_temperatur` - TRV interne Temperatur
 - `sensor.trv_[name]_trv_batterie` - Batteriestand des TRV
-- `sensor.trv_[name]_temperaturdifferenz` - Differenz Soll/Ist
-- `sensor.trv_[name]_o_ventilposition` - Durchschnittliche Ventilposition
-- `sensor.trv_[name]_aktuelle_stufe` - Gewählte Stufe (*, 1-5)
+
+### ⚡ Advanced Sensors (17 neue Sensoren in v1.2.0)
+
+**📊 Energie & Effizienz:**
+- `sensor.trv_[name]_heizdauer_today` - Heizdauer heute (Stunden)
+- `sensor.trv_[name]_heizdauer_week` - Heizdauer diese Woche (Stunden)
+- `sensor.trv_[name]_geschätzte_heizenergie` - Energieverbrauch (kWh)
+- `sensor.trv_[name]_heizeffizienz` - Effizienz-Score (°C/%)
+
+**🔧 Ventil-Wartung:**
+- `sensor.trv_[name]_letzte_ventilbewegung` - Zeitpunkt letzte Bewegung
+- `sensor.trv_[name]_ventilbewegungen` - Anzahl Bewegungen
+- `sensor.trv_[name]_ventil_gesamtlaufzeit` - Lebensdauer (Stunden)
+
+**🌡️ Temperatur-Analyse:**
+- `sensor.trv_[name]_temperatur_trend` - Trend (rising/falling/stable)
+- `sensor.trv_[name]_durchschnittstemperatur` - Tages-Durchschnitt
+- `sensor.trv_[name]_minimale_temperatur` - Tages-Minimum
+- `sensor.trv_[name]_maximale_temperatur` - Tages-Maximum
+
+**🎯 Komfort & Optimierung:**
+- `sensor.trv_[name]_zeit_bis_zieltemperatur` - Geschätzte Aufheizzeit (Min)
+- `sensor.trv_[name]_überhitzungswarnung` - Warnung bei >2°C über Ziel
+- `sensor.trv_[name]_unterheizungswarnung` - Warnung bei stagnierender Temp
+
+**📡 System-Status:**
+- `sensor.trv_[name]_verbindungsstatus` - Online/Offline Status
+- `sensor.trv_[name]_letztes_update` - Zeitpunkt letzter Daten
+- `sensor.trv_[name]_batteriestatus` - Status als Text (Gut/Mittel/Schwach)
+
+> 📖 **Detaillierte Dokumentation:** Siehe [ADVANCED_SENSORS.md](ADVANCED_SENSORS.md) für alle Details, Beispiele und Automatisierungen
 
 ### Einstellungen
 - `select.trv_[name]_steuermodus` - Steuermodus (Standard: **proportional**)
@@ -169,6 +199,21 @@ cards:
 - Der erste Durchlauf erfolgt 7 Tage nach Aktivierung
 
 ## 📝 Changelog
+
+### v1.2.0 - Advanced Analytics 📊 ✨
+- ⚡ **17 neue Advanced Sensors** für detaillierte Einblicke
+- 📊 **Energie-Tracking:** Heizdauer (täglich/wöchentlich), geschätzter kWh-Verbrauch
+- 🎯 **Effizienz-Analyse:** Heizeffizienz-Score (°C/% Ventilöffnung)
+- 🔧 **Wartungs-Sensoren:** Ventilbewegungen, Laufzeit, letzte Bewegung
+- 🌡️ **Temperatur-Trends:** Rising/Falling/Stable mit Änderungsrate
+- 📈 **Tages-Statistiken:** Min/Max/Durchschnittstemperatur
+- ⏱️ **Zeit bis Ziel:** Geschätzte Aufheizzeit basierend auf Trend
+- 🔔 **Intelligente Warnungen:** Überhitzung, Unterheizung (Fenster offen?)
+- 📡 **System-Monitoring:** Verbindungsstatus, letztes Update
+- 🔋 **Batterie-Status:** Text-basiert (Gut/Mittel/Schwach) statt nur %
+- 🎨 **Logo-Support:** Manifest-Optimierung für bessere Darstellung
+- 📚 **Umfangreiche Doku:** ADVANCED_SENSORS.md mit Beispielen & Automatisierungen
+- ⚡ **Performance:** Alle Sensoren mit State Restore & optimiertem Tracking
 
 ### v1.1.0 - Production Ready 🚀
 - ✨ Umschaltbarer Steuermodus (binär/proportional) mit Auto-Reload
