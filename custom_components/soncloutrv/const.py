@@ -1,7 +1,7 @@
 """Constants for the SonClouTRV integration."""
 
 DOMAIN = "soncloutrv"
-PLATFORMS = ["climate", "sensor", "number", "switch", "button"]
+PLATFORMS = ["climate", "sensor", "number", "switch", "button", "select"]
 
 # Configuration keys
 CONF_VALVE_ENTITY = "valve_entity"

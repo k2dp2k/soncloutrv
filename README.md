@@ -93,6 +93,7 @@ Nach der Einrichtung werden automatisch erstellt:
 - `sensor.[name]_o_ventilposition` - Durchschnitt
 
 ### Einstellungen (Live konfigurierbar)
+- `select.[name]_steuermodus` - Binär oder Proportional
 - `number.[name]_hysterese` - 0,1-2,0°C (Standard: 0,5°C)
 - `number.[name]_tragheit_min_update_intervall` - 1-60 Min (Standard: 10 Min)
 

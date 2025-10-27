@@ -52,6 +52,20 @@
         "name": "Ventil Durchbewegen",
         "state": "Führt ein sofortiges Ventil-Durchbewegen durch (100% → 0% → zurück). Dauer: ca. 1 Minute."
       }
+    },
+    "select": {
+      "control_mode": {
+        "name": "Steuermodus",
+        "state": "Wählen Sie zwischen binärer (An/Aus) oder proportionaler (stufenloser) Ventilsteuerung.",
+        "state_attributes": {
+          "options": {
+            "state": {
+              "binary": "Binär (An/Aus)",
+              "proportional": "Proportional (stufenlos)"
+            }
+          }
+        }
+      }
     }
   },
   "entity_component": {

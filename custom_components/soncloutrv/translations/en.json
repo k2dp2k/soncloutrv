@@ -1,4 +1,20 @@
 {
+  "entity": {
+    "select": {
+      "control_mode": {
+        "name": "Control Mode",
+        "state": "Choose between binary (on/off) or proportional (gradual) valve control.",
+        "state_attributes": {
+          "options": {
+            "state": {
+              "binary": "Binary (On/Off)",
+              "proportional": "Proportional (Gradual)"
+            }
+          }
+        }
+      }
+    }
+  },
   "entity_component": {
     "_": {
       "state_attributes": {
