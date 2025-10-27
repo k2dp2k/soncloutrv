@@ -26,114 +26,66 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     """Set up SonClouTRV sensor platform."""
-    # Find the climate entity - use the correct entity_id with sontrv prefix
-    name_slug = config_entry.data['name'].lower().replace(' ', '_')
-    climate_entity_id = f"climate.sontrv_{name_slug}"
+    # Use the original SONOFF TRV entity from config
+    # This is more reliable and works with any naming scheme
+    valve_entity = config_entry.data.get('valve_entity')
+    if not valve_entity:
+        _LOGGER.error("No valve_entity found in config")
+        return
     
+    # Derive base name for sensors from valve entity
+    # e.g. climate.heizung_wohnzimmer_fussboden -> heizung_wohnzimmer_fussboden
+    base_entity_id = valve_entity.replace('climate.', '')
+    
+    # Create proxy sensors that reference the original TRV sensors
     sensors = [
-        SonClouTRVSensor(
+        SonClouTRVProxySensor(
             hass,
             config_entry,
-            climate_entity_id,
-            "valve_position",
-            "Ventilposition",
-            PERCENTAGE,
-            "mdi:valve",
-            SensorStateClass.MEASUREMENT,
-            None,
-            "Aktuelle Öffnung des Ventils (0-100%). Je höher, desto mehr Heizleistung.",
-        ),
-        SonClouTRVSensor(
-            hass,
-            config_entry,
-            climate_entity_id,
-            "trv_internal_temperature",
-            "TRV Temperatur",
-            UnitOfTemperature.CELSIUS,
-            "mdi:thermometer",
-            SensorStateClass.MEASUREMENT,
-            SensorDeviceClass.TEMPERATURE,
-            "Vom TRV-Sensor gemessene Temperatur (nur zum Vergleich mit externem Sensor).",
-        ),
-        SonClouTRVSensor(
-            hass,
-            config_entry,
-            climate_entity_id,
-            "trv_battery",
+            f"sensor.{base_entity_id}_battery",
             "TRV Batterie",
-            PERCENTAGE,
             "mdi:battery",
-            SensorStateClass.MEASUREMENT,
-            SensorDeviceClass.BATTERY,
-            "Batterieladung des TRV-Thermostats. Warnung bei unter 20%.",
+            "Batterieladung des SONOFF TRVZB.",
         ),
-        SonClouTRVSensor(
+        SonClouTRVProxySensor(
             hass,
             config_entry,
-            climate_entity_id,
-            "temperature_difference",
-            "Temperaturdifferenz",
-            UnitOfTemperature.CELSIUS,
-            "mdi:thermometer-lines",
-            SensorStateClass.MEASUREMENT,
-            None,
-            "Differenz zwischen Soll- und Ist-Temperatur. Positiv = zu kalt, negativ = zu warm.",
+            f"sensor.{base_entity_id}_local_temperature",
+            "TRV Temperatur",
+            "mdi:thermometer",
+            "Vom SONOFF TRVZB gemessene Temperatur.",
         ),
-        SonClouTRVSensor(
+        SonClouTRVProxySensor(
             hass,
             config_entry,
-            climate_entity_id,
-            "average_valve_position",
-            "Ø Ventilposition",
-            PERCENTAGE,
-            "mdi:gauge",
-            SensorStateClass.MEASUREMENT,
-            None,
-            "Durchschnittliche Ventilöffnung der letzten 10 Anpassungen.",
-        ),
-        SonClouTRVSensor(
-            hass,
-            config_entry,
-            climate_entity_id,
-            "preset_mode",
-            "Aktuelle Stufe",
-            None,
-            "mdi:numeric",
-            None,
-            None,
-            "Aktuell gewählte Ventilöffnungsstufe (* = 0%, 1-5 = 20%-100%).",
+            f"number.{base_entity_id}_valve_opening_degree",
+            "Ventilposition",
+            "mdi:valve",
+            "Aktuelle Ventilöffnung (0-100%).",
         ),
     ]
     
     async_add_entities(sensors, True)
 
 
-class SonClouTRVSensor(SensorEntity):
-    """Representation of a SonClouTRV sensor."""
+class SonClouTRVProxySensor(SensorEntity):
+    """Proxy sensor that mirrors an existing TRV sensor."""
 
     def __init__(
         self,
         hass: HomeAssistant,
         config_entry: ConfigEntry,
-        climate_entity_id: str,
-        attribute_name: str,
+        source_entity_id: str,
         name: str,
-        unit: str,
         icon: str,
-        state_class: SensorStateClass | None = None,
-        device_class: SensorDeviceClass | None = None,
         description: str | None = None,
     ) -> None:
-        """Initialize the sensor."""
+        """Initialize the proxy sensor."""
         self.hass = hass
-        self._climate_entity_id = climate_entity_id
-        self._attribute_name = attribute_name
+        self._source_entity_id = source_entity_id
         self._attr_name = f"{config_entry.data['name']} {name}"
-        self._attr_unique_id = f"{DOMAIN}_{config_entry.entry_id}_{attribute_name}"
-        self._attr_native_unit_of_measurement = unit
+        self._attr_unique_id = f"{DOMAIN}_{config_entry.entry_id}_{name.lower().replace(' ', '_')}"
         self._attr_icon = icon
-        self._attr_state_class = state_class
-        self._attr_device_class = device_class
         self._attr_native_value = None
         self._remove_listener = None
         
@@ -143,34 +95,25 @@ class SonClouTRVSensor(SensorEntity):
             name=f"SonTRV {config_entry.data['name']}",
             manufacturer="k2dp2k",
             model="Smart Thermostat Control",
-            sw_version="1.0.0",
+            sw_version="1.1.0",
         )
         
-        # Entity description
         if description:
-            self._attr_entity_description = SensorEntityDescription(
-                key=attribute_name,
-                name=name,
-                native_unit_of_measurement=unit,
-                icon=icon,
-                state_class=state_class,
-                device_class=device_class,
-            )
-            self._attr_extra_state_attributes = {"description": description}
+            self._attr_extra_state_attributes = {"description": description, "source": source_entity_id}
 
     async def async_added_to_hass(self) -> None:
         """Run when entity about to be added."""
         await super().async_added_to_hass()
         
-        # Track climate entity state changes
+        # Track source entity state changes
         self._remove_listener = async_track_state_change_event(
             self.hass,
-            [self._climate_entity_id],
-            self._async_climate_changed,
+            [self._source_entity_id],
+            self._async_source_changed,
         )
         
         # Initial update
-        await self._async_update_from_climate()
+        await self._async_update_from_source()
 
     async def async_will_remove_from_hass(self) -> None:
         """Run when entity will be removed."""
@@ -178,13 +121,17 @@ class SonClouTRVSensor(SensorEntity):
             self._remove_listener()
 
     @callback
-    async def _async_climate_changed(self, event) -> None:
-        """Handle climate entity state changes."""
-        await self._async_update_from_climate()
+    async def _async_source_changed(self, event) -> None:
+        """Handle source entity state changes."""
+        await self._async_update_from_source()
         self.async_write_ha_state()
 
-    async def _async_update_from_climate(self) -> None:
-        """Update sensor value from climate entity attribute."""
-        climate_state = self.hass.states.get(self._climate_entity_id)
-        if climate_state:
-            self._attr_native_value = climate_state.attributes.get(self._attribute_name)
+    async def _async_update_from_source(self) -> None:
+        """Update sensor value from source entity."""
+        source_state = self.hass.states.get(self._source_entity_id)
+        if source_state and source_state.state not in ("unavailable", "unknown"):
+            self._attr_native_value = source_state.state
+            # Copy unit and device class from source
+            self._attr_native_unit_of_measurement = source_state.attributes.get("unit_of_measurement")
+            self._attr_device_class = source_state.attributes.get("device_class")
+            self._attr_state_class = source_state.attributes.get("state_class")
