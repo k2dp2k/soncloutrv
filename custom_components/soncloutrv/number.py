@@ -49,6 +49,19 @@ async def async_setup_entry(
             10,  # Default: 10 minutes
             "Minimale Zeit zwischen Ventil-Anpassungen. Höhere Werte = träger. Empfehlung: 10-20 Min für Fußbodenheizung.",
         ),
+        SonClouTRVNumber(
+            hass,
+            config_entry,
+            "proportional_gain",
+            "P-Verstärkung",
+            5.0,
+            50.0,
+            1.0,
+            "%/°C",
+            "mdi:tune-vertical",
+            20.0,  # Default: 20% per °C
+            "Proportionale Verstärkung: Wie stark das Ventil pro °C Temperaturdifferenz öffnet. Höhere Werte = aggressiver. Standard: 20%/°C.",
+        ),
     ]
     
     async_add_entities(numbers, True)
@@ -115,6 +128,9 @@ class SonClouTRVNumber(NumberEntity):
                     # Convert minutes to seconds
                     entity._min_valve_update_interval = int(value * 60)
                     _LOGGER.info("%s: Min valve update interval set to %d minutes", entity.name, int(value))
+                elif self._setting_id == "proportional_gain":
+                    entity._proportional_gain = value
+                    _LOGGER.info("%s: Proportional gain set to %.1f%%/°C", entity.name, value)
                 break
         
         self.async_write_ha_state()

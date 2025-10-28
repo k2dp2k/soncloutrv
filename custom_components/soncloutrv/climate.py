@@ -163,7 +163,7 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
         self._time_control_enabled = config.get(CONF_TIME_CONTROL_ENABLED, False)
         self._time_start = config.get(CONF_TIME_START, "06:00")
         self._time_end = config.get(CONF_TIME_END, "22:00")
-        self._proportional_gain = config.get(CONF_PROPORTIONAL_GAIN, 10.0)
+        self._proportional_gain = config.get(CONF_PROPORTIONAL_GAIN, 20.0)
         
         # State
         self._attr_hvac_mode = HVACMode.HEAT
@@ -550,14 +550,18 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
             desired = 0
         elif temp_diff > self._hysteresis:
             # Too cold - open valve proportionally
-            # For underfloor heating: gradual opening based on temperature deficit
-            if temp_diff > 3.0:
-                # Large deficit (>3°C) - use maximum allowed opening
-                desired = self._max_valve_position
-            else:
-                # Proportional: hysteresis - 3.0°C range
-                proportion = (temp_diff - self._hysteresis) / (3.0 - self._hysteresis)
-                desired = int(proportion * self._max_valve_position)
+            # Use proportional_gain to adjust sensitivity
+            # Higher gain = opens more for same temperature difference
+            # Default gain = 10.0 means 1°C difference -> 10% opening per degree
+            
+            # Calculate proportional opening based on temperature deficit
+            proportion = (temp_diff - self._hysteresis) * self._proportional_gain / 100.0
+            
+            # Apply to max valve position
+            desired = int(proportion * self._max_valve_position)
+            
+            # Cap at maximum
+            desired = min(desired, self._max_valve_position)
         else:
             # In hysteresis zone - maintain current opening
             # This prevents constant on/off cycling
@@ -567,9 +571,10 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
         desired = max(0, min(self._max_valve_position, desired))
         
         _LOGGER.debug(
-            "%s: Temp diff: %.1f°C, Current opening: %d%%, Desired: %d%%, Max: %d%%",
+            "%s: Temp diff: %.1f°C, Gain: %.1f, Current opening: %d%%, Desired: %d%%, Max: %d%%",
             self.name,
             temp_diff,
+            self._proportional_gain,
             self._last_set_valve_opening,
             desired,
             self._max_valve_position,

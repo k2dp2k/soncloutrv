@@ -43,6 +43,10 @@
       "min_valve_update_interval": {
         "name": "Trägheit (Min. Update-Intervall)",
         "state": "Minimale Zeit zwischen Ventil-Anpassungen. Höhere Werte = träger. Empfehlung: 10-20 Min für Fußbodenheizung."
+      },
+      "proportional_gain": {
+        "name": "P-Verstärkung",
+        "state": "Proportionale Verstärkung: Wie stark das Ventil pro °C Temperaturdifferenz öffnet. Höhere Werte = aggressiver. Standard: 20%/°C."
       }
     },
     "switch": {
@@ -113,6 +117,9 @@
         },
         "min_valve_update_interval": {
           "name": "Minimales Update-Intervall"
+        },
+        "proportional_gain": {
+          "name": "P-Verstärkung"
         },
         "last_exercise": {
           "name": "Letzter Verkalkungsschutz"

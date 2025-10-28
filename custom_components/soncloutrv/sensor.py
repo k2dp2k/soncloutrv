@@ -24,6 +24,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.event import async_track_state_change_event, async_track_time_interval
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.restore_state import RestoreEntity
+from homeassistant.helpers import entity_registry as er
 from homeassistant.util import dt as dt_util
 
 from .const import DOMAIN
@@ -91,7 +92,23 @@ async def async_setup_entry(
         _LOGGER.error("Valve opening degree entity not found: %s", valve_pos_entity)
     
     # === ADVANCED STATISTICS SENSORS ===
-    climate_entity_id = f"climate.soncloutrv_{config_entry.entry_id}"
+    # Find the climate entity ID from entity registry
+    entity_reg = er.async_get(hass)
+    climate_entity_id = None
+    
+    # Search for climate entity with matching config_entry_id
+    for entity in entity_reg.entities.values():
+        if (entity.config_entry_id == config_entry.entry_id and 
+            entity.domain == "climate"):
+            climate_entity_id = entity.entity_id
+            break
+    
+    if not climate_entity_id:
+        # Fallback: construct from name
+        climate_name = config_entry.data.get('name', '').lower().replace(' ', '_')
+        climate_entity_id = f"climate.{climate_name}"
+    
+    _LOGGER.info("Using climate entity ID: %s for advanced sensors", climate_entity_id)
     
     # 1. Energy & Efficiency
     sensors.extend([

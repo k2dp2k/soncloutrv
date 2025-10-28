@@ -57,6 +57,9 @@
         "min_valve_update_interval": {
           "name": "Minimum Update Interval"
         },
+        "proportional_gain": {
+          "name": "Proportional Gain"
+        },
         "last_exercise": {
           "name": "Last Exercise"
         },
