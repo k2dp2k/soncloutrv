@@ -225,7 +225,6 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
         await super().async_added_to_hass()
         
         # Get reference to config_entry from registry
-        from homeassistant.helpers import device_registry, config_entries
         for entry in self.hass.config_entries.async_entries(DOMAIN):
             if entry.entry_id == self._entry_id:
                 self._config_entry = entry
