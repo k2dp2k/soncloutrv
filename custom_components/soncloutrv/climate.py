@@ -809,6 +809,9 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
         except Exception as err:
             _LOGGER.error("Error syncing temperature to TRV: %s", err)
         
+        # ✅ WICHTIG: Inertia-Timer zurücksetzen damit Steuerung sofort greift
+        self._last_valve_update = None
+        
         # ✅ WICHTIG: Kontrolllogik neu ausführen mit neuer Zieltemperatur
         await self._async_control_heating()
         
