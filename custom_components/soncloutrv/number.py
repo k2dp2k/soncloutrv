@@ -135,6 +135,14 @@ class SonClouTRVNumber(NumberEntity):
             
             if not found:
                 _LOGGER.warning("%s: Climate entity not found in registry, value not applied", self._attr_name)
+            
+            # Persist the value to config_entry.options
+            # This ensures the value survives a restart
+            self.hass.config_entries.async_update_entry(
+                self._config_entry,
+                options={**self._config_entry.options, self._setting_id: value},
+            )
+            _LOGGER.debug("%s: Saved %s = %.1f to config_entry", self._attr_name, self._setting_id, value)
         except Exception as err:
             _LOGGER.error("%s: Error setting native value: %s", self._attr_name, err)
         

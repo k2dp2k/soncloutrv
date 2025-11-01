@@ -146,10 +146,16 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
         self._attr_min_temp = config[CONF_MIN_TEMP]
         self._attr_max_temp = config[CONF_MAX_TEMP]
         self._attr_target_temperature = config[CONF_TARGET_TEMP]
-        self._hysteresis = config.get(CONF_HYSTERESIS, 0.5)
-        self._cold_tolerance = config.get(CONF_COLD_TOLERANCE, 0.3)
-        self._hot_tolerance = config.get(CONF_HOT_TOLERANCE, 0.3)
-        self._min_cycle_duration = config.get(CONF_MIN_CYCLE_DURATION, 300)
+        
+        # Store reference to config_entry for updates
+        self._config_entry = None  # Will be set in async_added_to_hass if available
+        
+        # Read hysteresis from options (user-set via number entity) or config (default)
+        # Options have priority over config data
+        self._hysteresis = self._get_config_value("hysteresis", config, 0.5)
+        self._cold_tolerance = self._get_config_value("cold_tolerance", config, 0.3)
+        self._hot_tolerance = self._get_config_value("hot_tolerance", config, 0.3)
+        self._min_cycle_duration = self._get_config_value("min_cycle_duration", config, 300)
         
         # Get max valve position from step selection
         valve_step = config.get(CONF_VALVE_OPENING_STEP, config.get(CONF_MAX_VALVE_POSITION, "4"))
@@ -167,7 +173,7 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
         self._time_control_enabled = config.get(CONF_TIME_CONTROL_ENABLED, False)
         self._time_start = config.get(CONF_TIME_START, "06:00")
         self._time_end = config.get(CONF_TIME_END, "22:00")
-        self._proportional_gain = config.get(CONF_PROPORTIONAL_GAIN, 20.0)
+        self._proportional_gain = self._get_config_value("proportional_gain", config, 20.0)
         
         # State
         self._attr_hvac_mode = HVACMode.HEAT
@@ -194,9 +200,44 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
         # Listeners
         self._remove_listeners = []
 
+    def _get_config_value(self, key: str, config: dict[str, Any], default: Any) -> Any:
+        """Get config value from config_entry.options or config.data with fallback to default.
+        
+        Options (user-set via number entities) have priority over config data.
+        """
+        # Try to get from config_entry.options first if available
+        # This will be populated after async_added_to_hass
+        if self._config_entry is not None:
+            value = self._config_entry.options.get(key)
+            if value is not None:
+                return value
+        
+        # Fall back to config.data
+        value = config.get(key)
+        if value is not None:
+            return value
+        
+        # Use default
+        return default
+    
     async def async_added_to_hass(self) -> None:
         """Run when entity about to be added."""
         await super().async_added_to_hass()
+        
+        # Get reference to config_entry from registry
+        from homeassistant.helpers import device_registry, config_entries
+        for entry in self.hass.config_entries.async_entries(DOMAIN):
+            if entry.entry_id == self._entry_id:
+                self._config_entry = entry
+                # Re-read values from options now that we have config_entry
+                self._hysteresis = self._get_config_value("hysteresis", self._config, 0.5)
+                self._cold_tolerance = self._get_config_value("cold_tolerance", self._config, 0.3)
+                self._hot_tolerance = self._get_config_value("hot_tolerance", self._config, 0.3)
+                self._min_cycle_duration = self._get_config_value("min_cycle_duration", self._config, 300)
+                self._proportional_gain = self._get_config_value("proportional_gain", self._config, 20.0)
+                _LOGGER.debug("%s: Loaded config values from options - hysteresis=%.1f, gain=%.1f", 
+                            self.name, self._hysteresis, self._proportional_gain)
+                break
         
         # Restore previous state
         if (last_state := await self.async_get_last_state()) is not None:
