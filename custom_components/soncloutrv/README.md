@@ -200,6 +200,13 @@ cards:
 
 ## 📝 Changelog
 
+### v1.2.1 - Konfigurationspersistenz Fix 🔧
+- ✅ **Hysterese-Persistenz Fix:** Hysterese und andere Einstellungen (P-Verstärkung, Trägheit) bleiben nach Neustart erhalten
+- 🗂️ **Config Entry Options:** Werte werden in `config_entry.options` gespeichert statt nur temporär
+- 🐛 **Number Entity Fix:** Korrekte Wiederherstellung der gespeicherten Werte beim Laden
+- 🎨 **Icon Fix:** `"icon": "icon.png"` explizit in manifest.json für bessere Logo-Anzeige
+- 🚀 **Import Fix:** Behoben ImportError beim Start der Integration
+
 ### v1.2.0 - Advanced Analytics 📊 ✨
 - ⚡ **17 neue Advanced Sensors** für detaillierte Einblicke
 - 📊 **Energie-Tracking:** Heizdauer (täglich/wöchentlich), geschätzter kWh-Verbrauch
