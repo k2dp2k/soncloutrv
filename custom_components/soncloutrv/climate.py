@@ -150,12 +150,11 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
         # Store reference to config_entry for updates
         self._config_entry = None  # Will be set in async_added_to_hass if available
         
-        # Read hysteresis from options (user-set via number entity) or config (default)
-        # Options have priority over config data
-        self._hysteresis = self._get_config_value("hysteresis", config, 0.5)
-        self._cold_tolerance = self._get_config_value("cold_tolerance", config, 0.3)
-        self._hot_tolerance = self._get_config_value("hot_tolerance", config, 0.3)
-        self._min_cycle_duration = self._get_config_value("min_cycle_duration", config, 300)
+        # Read from config.data (options will be loaded later in async_added_to_hass)
+        self._hysteresis = config.get(CONF_HYSTERESIS, 0.5)
+        self._cold_tolerance = config.get(CONF_COLD_TOLERANCE, 0.3)
+        self._hot_tolerance = config.get(CONF_HOT_TOLERANCE, 0.3)
+        self._min_cycle_duration = config.get(CONF_MIN_CYCLE_DURATION, 300)
         
         # Get max valve position from step selection
         valve_step = config.get(CONF_VALVE_OPENING_STEP, config.get(CONF_MAX_VALVE_POSITION, "4"))
@@ -173,7 +172,7 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
         self._time_control_enabled = config.get(CONF_TIME_CONTROL_ENABLED, False)
         self._time_start = config.get(CONF_TIME_START, "06:00")
         self._time_end = config.get(CONF_TIME_END, "22:00")
-        self._proportional_gain = self._get_config_value("proportional_gain", config, 20.0)
+        self._proportional_gain = config.get(CONF_PROPORTIONAL_GAIN, 20.0)
         
         # State
         self._attr_hvac_mode = HVACMode.HEAT
