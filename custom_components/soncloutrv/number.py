@@ -96,7 +96,10 @@ class SonClouTRVNumber(NumberEntity):
         self._attr_native_unit_of_measurement = unit
         self._attr_icon = icon
         self._attr_mode = NumberMode.BOX
-        self._attr_native_value = default_value
+        
+        # Load value from config_entry.options (user-set) or use default
+        saved_value = config_entry.options.get(setting_id)
+        self._attr_native_value = saved_value if saved_value is not None else default_value
         
         # Device info for grouping
         self._attr_device_info = DeviceInfo(
