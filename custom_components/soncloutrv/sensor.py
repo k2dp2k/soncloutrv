@@ -26,8 +26,9 @@ from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.restore_state import RestoreEntity
 from homeassistant.helpers import entity_registry as er
 from homeassistant.util import dt as dt_util
+from homeassistant.const import CONF_NAME
 
-from .const import DOMAIN
+from .const import DOMAIN, CONF_VALVE_ENTITY
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -42,7 +43,7 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     """Set up SonClouTRV sensor platform."""
-    valve_entity = config_entry.data.get('valve_entity')
+    valve_entity = config_entry.data.get(CONF_VALVE_ENTITY)
     if not valve_entity:
         _LOGGER.error("No valve_entity found in config")
         return
@@ -79,17 +80,21 @@ async def async_setup_entry(
     else:
         _LOGGER.warning("No temperature sensor found for %s", base_entity_id)
     
-    # Valve position
+    # Valve position - Try proxy sensor first, fallback to native
     valve_pos_entity = f"number.{base_entity_id}_valve_opening_degree"
     if hass.states.get(valve_pos_entity):
         sensors.append(SonClouTRVProxySensor(
             hass, config_entry, valve_pos_entity,
-            "Ventilposition", "mdi:valve",
-            "Aktuelle Ventilöffnung (0-100%).",
+            "Ventilposition (TRV)", "mdi:valve",
+            "Aktuelle Ventilöffnung vom TRV (0-100%).",
         ))
-        _LOGGER.info("Found valve position: %s", valve_pos_entity)
+        _LOGGER.info("Found TRV valve position: %s", valve_pos_entity)
     else:
-        _LOGGER.error("Valve opening degree entity not found: %s", valve_pos_entity)
+        _LOGGER.warning("TRV valve opening degree entity not found: %s", valve_pos_entity)
+    
+    # Always add native SonTRV valve position sensor (reads from climate entity)
+    sensors.append(SonClouTRVNativeValvePositionSensor(hass, config_entry))
+    _LOGGER.info("Added native SonTRV valve position sensor")
     
     # === ADVANCED STATISTICS SENSORS ===
     # Find the climate entity ID from entity registry
@@ -105,7 +110,7 @@ async def async_setup_entry(
     
     if not climate_entity_id:
         # Fallback: construct from name
-        climate_name = config_entry.data.get('name', '').lower().replace(' ', '_')
+        climate_name = config_entry.data.get(CONF_NAME, '').lower().replace(' ', '_')
         climate_entity_id = f"climate.{climate_name}"
     
     _LOGGER.info("Using climate entity ID: %s for advanced sensors", climate_entity_id)
@@ -219,15 +224,125 @@ class SonClouTRVProxySensor(SensorEntity):
             self._attr_state_class = source_state.attributes.get("state_class")
 
 
+class SonClouTRVNativeValvePositionSensor(SensorEntity):
+    """Native valve position sensor reading from SonTRV climate entity.
+    
+    This sensor reads the valve position directly from the SonTRV climate entity's
+    extra state attributes, ensuring it's always available even if the TRV doesn't
+    expose a valve_opening_degree entity.
+    """
+
+    def __init__(
+        self,
+        hass: HomeAssistant,
+        config_entry: ConfigEntry,
+    ) -> None:
+        """Initialize the native valve position sensor."""
+        self.hass = hass
+        self._config_entry = config_entry
+        self._climate_entity_id = None
+        self._remove_listener = None
+        
+        self._attr_name = f"{config_entry.data[CONF_NAME]} Ventilposition"
+        self._attr_unique_id = f"{DOMAIN}_{config_entry.entry_id}_native_valve_position"
+        self._attr_icon = "mdi:valve"
+        self._attr_native_unit_of_measurement = PERCENTAGE
+        self._attr_state_class = SensorStateClass.MEASUREMENT
+        self._attr_native_value = None
+        
+        # Device info for grouping
+        self._attr_device_info = DeviceInfo(
+            identifiers={(DOMAIN, config_entry.entry_id)},
+            name=f"SonTRV {config_entry.data[CONF_NAME]}",
+            manufacturer="k2dp2k",
+            model="Smart Thermostat Control",
+            sw_version="1.1.1",
+        )
+        
+        self._attr_extra_state_attributes = {
+            "description": "Aktuelle Ventilöffnung von SonTRV (unabhängig vom TRV).",
+            "source": "climate entity attributes"
+        }
+
+    async def async_added_to_hass(self) -> None:
+        """Run when entity about to be added."""
+        await super().async_added_to_hass()
+        
+        # Find the climate entity ID from entity registry
+        entity_reg = er.async_get(self.hass)
+        for entity in entity_reg.entities.values():
+            if (entity.config_entry_id == self._config_entry.entry_id 
+                and entity.domain == "climate"):
+                self._climate_entity_id = entity.entity_id
+                _LOGGER.info(
+                    "Native valve position sensor found climate entity: %s",
+                    self._climate_entity_id,
+                )
+                break
+        
+        if not self._climate_entity_id:
+            _LOGGER.error(
+                "Native valve position sensor could not find climate entity for config_entry_id: %s",
+                self._config_entry.entry_id,
+            )
+            return
+        
+        # Track climate entity state changes
+        self._remove_listener = async_track_state_change_event(
+            self.hass,
+            [self._climate_entity_id],
+            self._async_climate_changed,
+        )
+        
+        # Initial update
+        await self._async_update_from_climate()
+
+    async def async_will_remove_from_hass(self) -> None:
+        """Run when entity will be removed."""
+        if self._remove_listener:
+            self._remove_listener()
+
+    @callback
+    async def _async_climate_changed(self, event) -> None:
+        """Handle climate entity state changes."""
+        await self._async_update_from_climate()
+        self.async_write_ha_state()
+
+    async def _async_update_from_climate(self) -> None:
+        """Update valve position from climate entity attributes."""
+        if not self._climate_entity_id:
+            return
+        
+        climate_state = self.hass.states.get(self._climate_entity_id)
+        if not climate_state:
+            return
+        
+        try:
+            # Read valve_position from extra_state_attributes
+            valve_position = climate_state.attributes.get("valve_position")
+            if valve_position is not None:
+                self._attr_native_value = int(valve_position)
+            else:
+                _LOGGER.debug(
+                    "valve_position attribute not found in climate entity %s",
+                    self._climate_entity_id,
+                )
+        except (ValueError, TypeError) as err:
+            _LOGGER.error(
+                "Error reading valve_position from climate entity: %s",
+                err,
+            )
+
+
 # Helper function for device info
 def get_device_info(config_entry: ConfigEntry) -> DeviceInfo:
     """Get standard device info for all sensors."""
     return DeviceInfo(
         identifiers={(DOMAIN, config_entry.entry_id)},
-        name=f"SonTRV {config_entry.data['name']}",
+        name=f"SonTRV {config_entry.data[CONF_NAME]}",
         manufacturer="k2dp2k",
         model="Smart Thermostat Control",
-        sw_version="1.1.0",
+        sw_version="1.1.1",
     )
 
 
@@ -264,7 +379,8 @@ class SonClouTRVHeatingDurationSensor(RestoreEntity, SensorEntity):
         if (last := await self.async_get_last_state()):
             try:
                 self._duration_seconds = float(last.state or 0) * 3600
-            except: pass
+            except (ValueError, TypeError):
+                pass
         self._remove_listener = async_track_state_change_event(self.hass, [self._valve_entity], self._update)
         self._remove_interval = async_track_time_interval(self.hass, self._check_reset, timedelta(minutes=1))
         await self._update()
@@ -286,7 +402,8 @@ class SonClouTRVHeatingDurationSensor(RestoreEntity, SensorEntity):
             self._last_update = now
             self._attr_native_value = round(self._duration_seconds / 3600, 2)
             self.async_write_ha_state()
-        except: pass
+        except (ValueError, TypeError):
+            pass
 
     async def _check_reset(self, now=None):
         if dt_util.now() >= self._reset_time:
@@ -316,8 +433,10 @@ class SonClouTRVHeatingEnergySensor(RestoreEntity, SensorEntity):
     async def async_added_to_hass(self):
         await super().async_added_to_hass()
         if (last := await self.async_get_last_state()):
-            try: self._energy_kwh = float(last.state or 0)
-            except: pass
+            try:
+                self._energy_kwh = float(last.state or 0)
+            except (ValueError, TypeError):
+                pass
         self._remove_listener = async_track_state_change_event(self.hass, [self._valve_entity], self._update)
         self._remove_interval = async_track_time_interval(self.hass, self._update, SCAN_INTERVAL)
         await self._update()
@@ -329,7 +448,8 @@ class SonClouTRVHeatingEnergySensor(RestoreEntity, SensorEntity):
     @callback
     async def _update(self, event=None):
         state = self.hass.states.get(self._valve_entity)
-        if not state or state.state in ("unavailable", "unknown"): return
+        if not state or state.state in ("unavailable", "unknown"):
+            return
         try:
             pos = float(state.state)
             now = dt_util.now()
@@ -344,7 +464,8 @@ class SonClouTRVHeatingEnergySensor(RestoreEntity, SensorEntity):
                 "current_power_kw": round((pos / 100) * HEATING_POWER_PER_PERCENT, 3),
             }
             self.async_write_ha_state()
-        except: pass
+        except (ValueError, TypeError) as err:
+            _LOGGER.debug("Error updating energy sensor: %s", err)
 
 
 class SonClouTRVEfficiencySensor(SensorEntity):
@@ -382,16 +503,23 @@ class SonClouTRVEfficiencySensor(SensorEntity):
                 self._valve_history.append(float(valve))
 
     async def _calc(self, now=None):
-        if len(self._temp_history) < 2: return
-        temp_change = self._temp_history[-1] - self._temp_history[0]
-        avg_valve = sum(self._valve_history) / len(self._valve_history)
-        if avg_valve > 5:
-            self._attr_native_value = round(temp_change / avg_valve, 4)
-            self._attr_extra_state_attributes = {
-                "temp_change": round(temp_change, 2),
-                "avg_valve_opening": round(avg_valve, 1),
-            }
-            self.async_write_ha_state()
+        if len(self._temp_history) < 2:
+            return
+        if not self._valve_history or len(self._valve_history) == 0:
+            return
+        
+        try:
+            temp_change = self._temp_history[-1] - self._temp_history[0]
+            avg_valve = sum(self._valve_history) / len(self._valve_history)
+            if avg_valve > 5:
+                self._attr_native_value = round(temp_change / avg_valve, 4)
+                self._attr_extra_state_attributes = {
+                    "temp_change": round(temp_change, 2),
+                    "avg_valve_opening": round(avg_valve, 1),
+                }
+                self.async_write_ha_state()
+        except (ValueError, TypeError, ZeroDivisionError) as err:
+            _LOGGER.debug("Error calculating efficiency: %s", err)
 
 
 # ===== 2. VALVE HEALTH & MAINTENANCE =====
@@ -413,8 +541,10 @@ class SonClouTRVLastMovementSensor(RestoreEntity, SensorEntity):
     async def async_added_to_hass(self):
         await super().async_added_to_hass()
         if (last := await self.async_get_last_state()) and last.state not in ("unavailable", "unknown"):
-            try: self._last_movement = dt_util.parse_datetime(last.state)
-            except: pass
+            try:
+                self._last_movement = dt_util.parse_datetime(last.state)
+            except (ValueError, TypeError):
+                pass
         self._remove_listener = async_track_state_change_event(self.hass, [self._valve_entity], self._detect)
 
     async def async_will_remove_from_hass(self):
@@ -423,7 +553,8 @@ class SonClouTRVLastMovementSensor(RestoreEntity, SensorEntity):
     @callback
     async def _detect(self, event):
         state = event.data.get("new_state")
-        if not state or state.state in ("unavailable", "unknown"): return
+        if not state or state.state in ("unavailable", "unknown"):
+            return
         try:
             pos = float(state.state)
             if self._last_pos is not None and abs(pos - self._last_pos) > 1:
@@ -433,7 +564,8 @@ class SonClouTRVLastMovementSensor(RestoreEntity, SensorEntity):
                 self._attr_extra_state_attributes = {"days_since_movement": days}
                 self.async_write_ha_state()
             self._last_pos = pos
-        except: pass
+        except (ValueError, TypeError):
+            pass
 
 
 class SonClouTRVMovementCountSensor(RestoreEntity, SensorEntity):
@@ -453,8 +585,10 @@ class SonClouTRVMovementCountSensor(RestoreEntity, SensorEntity):
     async def async_added_to_hass(self):
         await super().async_added_to_hass()
         if (last := await self.async_get_last_state()):
-            try: self._count = int(last.state or 0)
-            except: pass
+            try:
+                self._count = int(last.state or 0)
+            except (ValueError, TypeError):
+                pass
         self._remove_listener = async_track_state_change_event(self.hass, [self._valve_entity], self._count_movement)
 
     async def async_will_remove_from_hass(self):
@@ -463,7 +597,8 @@ class SonClouTRVMovementCountSensor(RestoreEntity, SensorEntity):
     @callback
     async def _count_movement(self, event):
         state = event.data.get("new_state")
-        if not state or state.state in ("unavailable", "unknown"): return
+        if not state or state.state in ("unavailable", "unknown"):
+            return
         try:
             pos = float(state.state)
             if self._last_pos is not None and abs(pos - self._last_pos) > 1:
@@ -471,7 +606,8 @@ class SonClouTRVMovementCountSensor(RestoreEntity, SensorEntity):
                 self._attr_native_value = self._count
                 self.async_write_ha_state()
             self._last_pos = pos
-        except: pass
+        except (ValueError, TypeError):
+            pass
 
 
 class SonClouTRVTotalRuntimeSensor(RestoreEntity, SensorEntity):
@@ -494,8 +630,10 @@ class SonClouTRVTotalRuntimeSensor(RestoreEntity, SensorEntity):
     async def async_added_to_hass(self):
         await super().async_added_to_hass()
         if (last := await self.async_get_last_state()):
-            try: self._runtime_seconds = float(last.state or 0) * 3600
-            except: pass
+            try:
+                self._runtime_seconds = float(last.state or 0) * 3600
+            except (ValueError, TypeError):
+                pass
         self._remove_listener = async_track_state_change_event(self.hass, [self._valve_entity], self._update)
         self._remove_interval = async_track_time_interval(self.hass, self._update, SCAN_INTERVAL)
 
@@ -506,7 +644,8 @@ class SonClouTRVTotalRuntimeSensor(RestoreEntity, SensorEntity):
     @callback
     async def _update(self, event=None):
         state = self.hass.states.get(self._valve_entity)
-        if not state or state.state in ("unavailable", "unknown"): return
+        if not state or state.state in ("unavailable", "unknown"):
+            return
         try:
             pos = float(state.state)
             now = dt_util.now()
@@ -517,7 +656,8 @@ class SonClouTRVTotalRuntimeSensor(RestoreEntity, SensorEntity):
             self._last_update = now
             self._attr_native_value = round(self._runtime_seconds / 3600, 1)
             self.async_write_ha_state()
-        except: pass
+        except (ValueError, TypeError):
+            pass
 
 
 # ===== 3. TEMPERATURE ANALYSIS =====
@@ -884,9 +1024,11 @@ class SonClouTRVBatteryStatusSensor(SensorEntity):
 
     @callback
     async def _update(self, event=None):
-        if not self._battery_entity: return
+        if not self._battery_entity:
+            return
         state = self.hass.states.get(self._battery_entity)
-        if not state or state.state in ("unavailable", "unknown"): return
+        if not state or state.state in ("unavailable", "unknown"):
+            return
         try:
             level = float(state.state)
             if level > 70:
@@ -897,4 +1039,5 @@ class SonClouTRVBatteryStatusSensor(SensorEntity):
                 self._attr_native_value, self._attr_icon = "Schwach", "mdi:battery-alert"
             self._attr_extra_state_attributes = {"battery_level": level}
             self.async_write_ha_state()
-        except: pass
+        except (ValueError, TypeError):
+            pass

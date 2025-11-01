@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timedelta
+from datetime import timedelta
 import logging
 from typing import Any
 
@@ -30,6 +30,7 @@ from homeassistant.helpers.event import (
 )
 from homeassistant.helpers.restore_state import RestoreEntity
 from homeassistant.helpers.entity import DeviceInfo
+from homeassistant.util import dt as dt_util
 
 from .const import (
     DOMAIN,
@@ -124,6 +125,9 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
         # Configuration
         self._attr_name = config[CONF_NAME]
         self._attr_unique_id = f"{DOMAIN}_{entry_id}"
+        
+        # Build consistent entity_id using entry_id
+        self._entity_id_base = f"{DOMAIN}_{entry_id}"
         
         # Device info for grouping entities
         self._attr_device_info = DeviceInfo(
@@ -529,7 +533,7 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
         if self._last_valve_update is None:
             return True
         
-        time_since_last_update = (datetime.now() - self._last_valve_update).total_seconds()
+        time_since_last_update = (dt_util.now() - self._last_valve_update).total_seconds()
         return time_since_last_update >= self._min_valve_update_interval
     
     def _calculate_desired_valve_opening(self) -> int:
@@ -627,7 +631,7 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
             
             # Track last set value and timestamp
             self._last_set_valve_opening = valve_opening
-            self._last_valve_update = datetime.now()
+            self._last_valve_update = dt_util.now()
             self._valve_position = valve_opening
             
             # Update statistics
@@ -718,7 +722,7 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
                     mqtt_topic,
                 )
             
-            self._last_valve_update = datetime.now()
+            self._last_valve_update = dt_util.now()
             
         except Exception as err:
             _LOGGER.error(
@@ -804,6 +808,9 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
             )
         except Exception as err:
             _LOGGER.error("Error syncing temperature to TRV: %s", err)
+        
+        # ✅ WICHTIG: Kontrolllogik neu ausführen mit neuer Zieltemperatur
+        await self._async_control_heating()
         
         self._update_extra_attributes()
         self.async_write_ha_state()

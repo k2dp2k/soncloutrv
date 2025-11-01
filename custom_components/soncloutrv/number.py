@@ -115,22 +115,27 @@ class SonClouTRVNumber(NumberEntity):
         """Update the current value."""
         self._attr_native_value = value
         
-        # Find the climate entity and update its settings
-        climate_entity_id = f"climate.{self._config_entry.data['name'].lower().replace(' ', '_')}"
-        
-        # Get the climate entity from registry
-        for entity in self.hass.data[DOMAIN].get(self._config_entry.entry_id, {}).get("entities", []):
-            if entity.entity_id == climate_entity_id:
-                if self._setting_id == "hysteresis":
-                    entity._hysteresis = value
-                    _LOGGER.info("%s: Hysteresis set to %.1f°C", entity.name, value)
-                elif self._setting_id == "min_valve_update_interval":
-                    # Convert minutes to seconds
-                    entity._min_valve_update_interval = int(value * 60)
-                    _LOGGER.info("%s: Min valve update interval set to %d minutes", entity.name, int(value))
-                elif self._setting_id == "proportional_gain":
-                    entity._proportional_gain = value
-                    _LOGGER.info("%s: Proportional gain set to %.1f%%/°C", entity.name, value)
-                break
+        try:
+            # Get the climate entity from registry
+            found = False
+            for entity in self.hass.data[DOMAIN].get(self._config_entry.entry_id, {}).get("entities", []):
+                if hasattr(entity, '_entity_id_base'):
+                    found = True
+                    if self._setting_id == "hysteresis":
+                        entity._hysteresis = value
+                        _LOGGER.info("%s: Hysteresis set to %.1f°C", entity.name, value)
+                    elif self._setting_id == "min_valve_update_interval":
+                        # Convert minutes to seconds
+                        entity._min_valve_update_interval = int(value * 60)
+                        _LOGGER.info("%s: Min valve update interval set to %d minutes", entity.name, int(value))
+                    elif self._setting_id == "proportional_gain":
+                        entity._proportional_gain = value
+                        _LOGGER.info("%s: Proportional gain set to %.1f%%/°C", entity.name, value)
+                    break
+            
+            if not found:
+                _LOGGER.warning("%s: Climate entity not found in registry, value not applied", self._attr_name)
+        except Exception as err:
+            _LOGGER.error("%s: Error setting native value: %s", self._attr_name, err)
         
         self.async_write_ha_state()

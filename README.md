@@ -217,6 +217,29 @@ target:
 
 ## 📄 Changelog
 
+### v1.1.1 (2025-11-01) - Critical Bug Fixes 🔧
+
+**Kritische Fixes:**
+- 🔴 **Thermostat reagiert sofort auf Temperatur-Änderungen** - `async_set_temperature()` triggert jetzt `_async_control_heating()`
+- 🔴 **Config Import Fehler behoben** - `CONF_NAME` wird korrekt von `homeassistant.const` importiert
+- 🔴 **Event Loop Blockierung eliminiert** - `asyncio.sleep()` durch `async_call_later()` ersetzt in Valve Exercise
+- 🔴 **Entity ID Lookup repariert** - Konsistente Entity-ID Konstruktion zwischen Climate und Number/Switch/Button
+- 🔴 **Timezone-Aware DateTime** - Alle `datetime.now()` durch `dt_util.now()` ersetzt
+
+**Verbesserungen:**
+- ✅ **Robuste Exception Handling** - Umfassendes Error Handling in Platform Setup und Entity Lookups
+- ✅ **Config Entry Merge** - Options Updates überschreiben keine kritischen Einstellungen mehr
+- ✅ **Code Quality** - Spezifische Exception Types statt bare `except:` clauses
+
+**Behobene Probleme:**
+- ❌ Thermostat bleibt im IDLE nach Temperatur-Eingabe
+- ❌ Integration lädt nicht: "cannot import name 'CONF_NAME'"
+- ❌ Home Assistant friert ein während Valve Exercise
+- ❌ Number Entities haben keine Wirkung
+- ❌ Switch/Button finden Climate Entity nicht
+
+**Status:** ✅ Vollständig getestet und produktionsreif
+
 ### v1.1.0 (2025-10-27) - Production Ready 🚀
 
 **Hauptfeatures:**

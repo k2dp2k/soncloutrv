@@ -186,7 +186,9 @@ class SonClouTRVOptionsFlow(config_entries.OptionsFlow):
     ) -> config_entries.FlowResult:
         """Manage the options."""
         if user_input is not None:
-            return self.async_create_entry(title="", data=user_input)
+            # Merge with existing config entry data to preserve required fields
+            merged_data = {**self.config_entry.data, **user_input}
+            return self.async_create_entry(title="", data=merged_data)
 
         data_schema = vol.Schema(
             {

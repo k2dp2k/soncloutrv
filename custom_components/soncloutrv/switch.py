@@ -1,16 +1,16 @@
 """Switch platform for SonClouTRV."""
 from __future__ import annotations
 
-import asyncio
 import logging
-from datetime import datetime, timedelta
+from datetime import timedelta
 
 from homeassistant.components.switch import SwitchEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from homeassistant.helpers.event import async_track_time_interval
+from homeassistant.helpers.event import async_track_time_interval, async_call_later
 from homeassistant.helpers.entity import DeviceInfo
+from homeassistant.util import dt as dt_util
 
 from .const import DOMAIN
 
@@ -108,7 +108,7 @@ class AntiCalcificationSwitch(SwitchEntity):
         if not self._attr_is_on:
             return
         
-        current_time = datetime.now()
+        current_time = dt_util.now()
         
         # Check if it's Sunday (weekday 6) and between 3:00-3:59 AM
         if current_time.weekday() != 6:  # Not Sunday
@@ -128,48 +128,84 @@ class AntiCalcificationSwitch(SwitchEntity):
 
     async def _async_exercise_valve(self) -> None:
         """Exercise the valve to prevent calcification (5 min open, 5 min closed)."""
-        # Find the climate entity
-        climate_entity_id = f"climate.{self._config_entry.data['name'].lower().replace(' ', '_')}"
-        
-        for entity in self.hass.data[DOMAIN].get(self._config_entry.entry_id, {}).get("entities", []):
-            if entity.entity_id == climate_entity_id:
-                _LOGGER.info("%s: Starting anti-calcification valve exercise (Sunday 3:00 AM)", entity.name)
-                
-                try:
-                    # Save current valve position and preset mode
-                    original_position = entity._valve_position
-                    original_preset = entity._attr_preset_mode
+        # Find the climate entity from registry
+        try:
+            found = False
+            for entity in self.hass.data[DOMAIN].get(self._config_entry.entry_id, {}).get("entities", []):
+                if hasattr(entity, '_entity_id_base'):
+                    found = True
+                    _LOGGER.info("%s: Starting anti-calcification valve exercise (Sunday 3:00 AM)", entity.name)
                     
-                    _LOGGER.info("%s: Saved current state - Position: %d%%, Preset: %s", 
-                               entity.name, original_position, original_preset)
+                    try:
+                        # Save current valve position and preset mode
+                        original_position = entity._valve_position
+                        original_preset = entity._attr_preset_mode
+                        
+                        _LOGGER.info("%s: Saved current state - Position: %d%%, Preset: %s", 
+                                   entity.name, original_position, original_preset)
+                        
+                        # Step 1: Fully open (100%) for 5 minutes
+                        await entity._async_set_valve_opening(100)
+                        _LOGGER.info("%s: Valve fully opened (100%%), scheduled close in 5 minutes", entity.name)
+                        
+                        # Schedule step 2 after 5 minutes (non-blocking)
+                        async_call_later(
+                            self.hass,
+                            300,  # 5 minutes
+                            self._async_exercise_step_2,
+                            entity,
+                            original_position,
+                            original_preset,
+                        )
+                        
+                    except Exception as err:
+                        _LOGGER.error("%s: Error during valve exercise: %s", entity.name, err)
                     
-                    # Step 1: Fully open (100%) for 5 minutes
-                    await entity._async_set_valve_opening(100)
-                    _LOGGER.info("%s: Valve fully opened (100%%) for 5 minutes", entity.name)
-                    await asyncio.sleep(300)  # 5 minutes
-                    
-                    # Step 2: Fully close (0%) for 5 minutes
-                    await entity._async_set_valve_opening(0)
-                    _LOGGER.info("%s: Valve fully closed (0%%) for 5 minutes", entity.name)
-                    await asyncio.sleep(300)  # 5 minutes
-                    
-                    # Step 3: Restore original position and trigger normal control
-                    await entity._async_set_valve_opening(original_position)
-                    entity._attr_preset_mode = original_preset
-                    _LOGGER.info("%s: Valve exercise complete - restored to %d%% (Preset: %s)", 
-                               entity.name, original_position, original_preset)
-                    
-                    # Update last exercise time
-                    self._last_exercise = datetime.now()
-                    self.async_write_ha_state()
-                    
-                    # Trigger normal heating control to resume
-                    await entity._async_control_heating()
-                    
-                except Exception as err:
-                    _LOGGER.error("%s: Error during valve exercise: %s", entity.name, err)
-                
-                break
+                    break
+            
+            if not found:
+                _LOGGER.warning("%s: Climate entity not found in registry, valve exercise skipped", self._attr_name)
+        except Exception as err:
+            _LOGGER.error("%s: Error in exercise valve lookup: %s", self._attr_name, err)
+    
+    async def _async_exercise_step_2(self, entity, original_position: int, original_preset: str) -> None:
+        """Step 2: Fully close valve for 5 minutes."""
+        try:
+            # Step 2: Fully close (0%) for 5 minutes
+            await entity._async_set_valve_opening(0)
+            _LOGGER.info("%s: Valve fully closed (0%%), scheduled restore in 5 minutes", entity.name)
+            
+            # Schedule step 3 after 5 minutes (non-blocking)
+            async_call_later(
+                self.hass,
+                300,  # 5 minutes
+                self._async_exercise_step_3,
+                entity,
+                original_position,
+                original_preset,
+            )
+            
+        except Exception as err:
+            _LOGGER.error("%s: Error during valve exercise step 2: %s", entity.name, err)
+    
+    async def _async_exercise_step_3(self, entity, original_position: int, original_preset: str) -> None:
+        """Step 3: Restore original position and resume normal control."""
+        try:
+            # Step 3: Restore original position and trigger normal control
+            await entity._async_set_valve_opening(original_position)
+            entity._attr_preset_mode = original_preset
+            _LOGGER.info("%s: Valve exercise complete - restored to %d%% (Preset: %s)", 
+                       entity.name, original_position, original_preset)
+            
+            # Update last exercise time
+            self._last_exercise = dt_util.now()
+            self.async_write_ha_state()
+            
+            # Trigger normal heating control to resume
+            await entity._async_control_heating()
+            
+        except Exception as err:
+            _LOGGER.error("%s: Error during valve exercise step 3: %s", entity.name, err)
 
     @property
     def extra_state_attributes(self) -> dict:
@@ -179,7 +215,7 @@ class AntiCalcificationSwitch(SwitchEntity):
         }
         if self._last_exercise:
             attrs["last_exercise"] = self._last_exercise.isoformat()
-            days_since = (datetime.now() - self._last_exercise).days
+            days_since = (dt_util.now() - self._last_exercise).days
             attrs["days_since_last_exercise"] = days_since
             attrs["next_exercise_in_days"] = max(0, 7 - days_since)
         return attrs
