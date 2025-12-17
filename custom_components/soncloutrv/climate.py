@@ -675,8 +675,15 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
             self._last_calc_time = now
             
         # 1. Proportional Term
-        # P = Kp * error
-        p_term = self._kp * error
+        # Optimization: Gain Scheduling (Boost)
+        # If error is large (> 1.0°C), increase Kp dynamically to overcome inertia faster.
+        effective_kp = self._kp
+        if error > 1.5:
+            effective_kp *= 2.5  # Heavy Boost for cold start
+        elif error > 0.8:
+            effective_kp *= 1.5  # Mild Boost for gap closing
+            
+        p_term = effective_kp * error
         
         # 2. Integral Term (Learning)
         # Only integrate if we have a valid time delta and error is within reasonable bounds
@@ -1003,7 +1010,20 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
         # ✅ WICHTIG: Inertia-Timer zurücksetzen damit Steuerung sofort greift
         self._last_valve_update = None
         
-        # Reset PID timing? No, keep integrating but update dt next cycle
+        # Optimization: Integrator Preloading (Smart Start)
+        # If we raise target temp significantly (> 1°C) and I-term is low/zero,
+        # preload it to give a head start. Assume we need at least 20% valve for heating.
+        if self._attr_current_temperature:
+            diff = temperature - self._attr_current_temperature
+            if diff > 1.0 and self._control_mode == CONTROL_MODE_PID:
+                # Calculate required I-sum for 20% output: 20 = Ki * I_sum -> I_sum = 20 / Ki
+                # Only preload if current integral is smaller than this
+                if self._ki > 0:
+                    preload_target = 20.0 / self._ki
+                    if self._integral_error < preload_target:
+                        # Don't jump fully, but boost significantly towards it
+                        self._integral_error = preload_target
+                        _LOGGER.info("%s: Smart Start - Preloaded PID Integrator to %.1f (Boost)", self.name, self._integral_error)
         
         # ✅ WICHTIG: Kontrolllogik neu ausführen mit neuer Zieltemperatur
         await self._async_control_heating()
