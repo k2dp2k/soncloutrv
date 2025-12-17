@@ -186,8 +186,10 @@ def main():
     original_dir = script_dir / "original"
     
     if not original_dir.exists():
-        print(f"\n❌ Error: Directory '{original_dir}' not found")
-        return 1
+        # Fallback to current directory if original/ doesn't exist
+        # This allows running validation on files in the root or other folders
+        print(f"\\nℹ️  Directory '{original_dir}' not found, checking current directory...")
+        original_dir = script_dir
     
     # Find YAML files
     yaml_files = list(original_dir.glob("*.yaml")) + list(original_dir.glob("*.yml"))

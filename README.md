@@ -217,6 +217,14 @@ target:
 
 ## 📄 Changelog
 
+### v1.2.2 (2025-12-17) - Wartung & Optimierung 🔧
+
+**Verbesserungen:**
+- ✅ **Optimierte Sensor-Initialisierung** - Reduzierte API-Aufrufe beim Start durch Wiederverwendung der Entity-IDs
+- ✅ **Migration-Framework** - Vorbereitung für zukünftige Updates ohne Neu-Einrichtung (`async_migrate_entry`)
+- ✅ **Tooling Fixes** - `validate_config.py` funktioniert nun auch im aktuellen Verzeichnis
+- 🧹 **Cleanup** - Entfernung veralteter Analysedateien
+
 ### v1.1.1 (2025-11-01) - Critical Bug Fixes 🔧
 
 **Kritische Fixes:**

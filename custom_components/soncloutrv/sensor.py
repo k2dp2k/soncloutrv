@@ -92,10 +92,6 @@ async def async_setup_entry(
     else:
         _LOGGER.warning("TRV valve opening degree entity not found: %s", valve_pos_entity)
     
-    # Always add native SonTRV valve position sensor (reads from climate entity)
-    sensors.append(SonClouTRVNativeValvePositionSensor(hass, config_entry))
-    _LOGGER.info("Added native SonTRV valve position sensor")
-    
     # === ADVANCED STATISTICS SENSORS ===
     # Find the climate entity ID from entity registry
     entity_reg = er.async_get(hass)
@@ -113,7 +109,12 @@ async def async_setup_entry(
         climate_name = config_entry.data.get(CONF_NAME, '').lower().replace(' ', '_')
         climate_entity_id = f"climate.{climate_name}"
     
-    _LOGGER.info("Using climate entity ID: %s for advanced sensors", climate_entity_id)
+    _LOGGER.info("Using climate entity ID: %s for sensors", climate_entity_id)
+
+    # Always add native SonTRV valve position sensor (reads from climate entity)
+    # Pass the found climate_entity_id to avoid looking it up again
+    sensors.append(SonClouTRVNativeValvePositionSensor(hass, config_entry, climate_entity_id))
+    _LOGGER.info("Added native SonTRV valve position sensor")
     
     # 1. Energy & Efficiency
     sensors.extend([
@@ -236,11 +237,12 @@ class SonClouTRVNativeValvePositionSensor(SensorEntity):
         self,
         hass: HomeAssistant,
         config_entry: ConfigEntry,
+        climate_entity_id: str | None = None,
     ) -> None:
         """Initialize the native valve position sensor."""
         self.hass = hass
         self._config_entry = config_entry
-        self._climate_entity_id = None
+        self._climate_entity_id = climate_entity_id
         self._remove_listener = None
         
         self._attr_name = f"{config_entry.data[CONF_NAME]} Ventilposition"
@@ -268,17 +270,18 @@ class SonClouTRVNativeValvePositionSensor(SensorEntity):
         """Run when entity about to be added."""
         await super().async_added_to_hass()
         
-        # Find the climate entity ID from entity registry
-        entity_reg = er.async_get(self.hass)
-        for entity in entity_reg.entities.values():
-            if (entity.config_entry_id == self._config_entry.entry_id 
-                and entity.domain == "climate"):
-                self._climate_entity_id = entity.entity_id
-                _LOGGER.info(
-                    "Native valve position sensor found climate entity: %s",
-                    self._climate_entity_id,
-                )
-                break
+        # If ID was not passed in init, try to find it (fallback)
+        if not self._climate_entity_id:
+            entity_reg = er.async_get(self.hass)
+            for entity in entity_reg.entities.values():
+                if (entity.config_entry_id == self._config_entry.entry_id 
+                    and entity.domain == "climate"):
+                    self._climate_entity_id = entity.entity_id
+                    _LOGGER.info(
+                        "Native valve position sensor found climate entity: %s",
+                        self._climate_entity_id,
+                    )
+                    break
         
         if not self._climate_entity_id:
             _LOGGER.error(
