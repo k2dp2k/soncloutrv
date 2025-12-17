@@ -230,6 +230,8 @@ target:
 ### v1.3.0 (2025-12-17) - PID Evolution & Architecture 🧠
 
 **Hauptfeatures:**
+- 🚀 **Turbo-Start (Smart Start)** - Überwindet die Trägheit beim Starten durch sofortigen I-Boost
+- ⚡ **Dynamischer Gain Boost** - Beschleunigt das Aufheizen bei großen Temperaturdifferenzen (>1,5°C)
 - 🧠 **Vollständiger PID-Regler** - Ersetzt einfache proportionale Logik
   - **P (Proportional)**: Basis-Reaktion (konfigurierbar)
   - **I (Integral)**: Lernt den stationären Wärmebedarf (Anti-Windup geschützt)
