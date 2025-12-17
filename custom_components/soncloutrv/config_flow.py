@@ -183,7 +183,10 @@ class SonClouTRVOptionsFlow(config_entries.OptionsFlow):
 
     def __init__(self, config_entry: config_entries.ConfigEntry) -> None:
         """Initialize options flow."""
-        self.config_entry = config_entry
+        # self.config_entry is already set by base class or handled differently in newer HA versions
+        # Just calling super if needed, but OptionsFlow usually doesn't need super().__init__ args
+        # However, to be safe and fix the error, we remove the assignment since it's a property without setter
+        pass
 
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
