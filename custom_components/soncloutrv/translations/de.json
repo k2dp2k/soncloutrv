@@ -38,7 +38,7 @@
     "number": {
       "hysteresis": {
         "name": "Hysterese",
-        "state": "Temperaturbereich, in dem das Ventil nicht verändert wird. Verhindert ständiges Schalten. Empfehlung: 0,3-0,7°C."
+        "state": "Temperaturbereich, in dem das Ventil nicht verändert wird. Verhindert ständiges Schalten. Empfehlung: 0,2-0,5°C."
       },
       "min_valve_update_interval": {
         "name": "Trägheit (Min. Update-Intervall)",
