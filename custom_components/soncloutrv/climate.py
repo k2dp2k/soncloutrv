@@ -305,6 +305,14 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
                             self.name, self._hysteresis, self._kp, self._ki, self._kd, self._ka)
                 break
         
+        # Auto-discover weather entity if not configured
+        if not self._outside_temp_sensor:
+            weather_entities = self.hass.states.async_entity_ids("weather")
+            if weather_entities:
+                # Pick the first one (usually weather.forecast_home or similar)
+                self._outside_temp_sensor = weather_entities[0]
+                _LOGGER.info("%s: Auto-discovered weather entity for Feed-Forward: %s", self.name, self._outside_temp_sensor)
+        
         # Restore previous state
         if (last_state := await self.async_get_last_state()) is not None:
             if last_state.state in (HVACMode.HEAT, HVACMode.OFF):
