@@ -7,7 +7,7 @@
   "icon": "icon.png",
   "issue_tracker": "https://github.com/k2dp2k/soncloutrv/issues",
   "requirements": [],
-  "version": "1.2.2",
+  "version": "1.3.0",
   "iot_class": "local_polling",
   "dependencies": ["mqtt"],
   "after_dependencies": ["mqtt"],

@@ -50,8 +50,15 @@ from .const import (
     CONF_TIME_START,
     CONF_TIME_END,
     CONF_PROPORTIONAL_GAIN,
+    CONF_KP,
+    CONF_KI,
+    CONF_KD,
+    DEFAULT_KP,
+    DEFAULT_KI,
+    DEFAULT_KD,
     CONTROL_MODE_BINARY,
     CONTROL_MODE_PROPORTIONAL,
+    CONTROL_MODE_PID,
     VALVE_OPENING_STEPS,
     ATTR_VALVE_POSITION,
     ATTR_CONTROL_MODE,
@@ -64,6 +71,10 @@ from .const import (
     ATTR_VALVE_ADJUSTMENTS,
     ATTR_AVG_VALVE_POSITION,
     ATTR_TEMP_TREND,
+    ATTR_PID_P,
+    ATTR_PID_I,
+    ATTR_PID_D,
+    ATTR_PID_INTEGRAL,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -172,7 +183,13 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
         self._time_control_enabled = config.get(CONF_TIME_CONTROL_ENABLED, False)
         self._time_start = config.get(CONF_TIME_START, "06:00")
         self._time_end = config.get(CONF_TIME_END, "22:00")
-        self._proportional_gain = config.get(CONF_PROPORTIONAL_GAIN, 20.0)
+        
+        # PID Parameters
+        # Legacy support: use proportional_gain if kp not set
+        legacy_p = config.get(CONF_PROPORTIONAL_GAIN, DEFAULT_KP)
+        self._kp = config.get(CONF_KP, legacy_p)
+        self._ki = config.get(CONF_KI, DEFAULT_KI)
+        self._kd = config.get(CONF_KD, DEFAULT_KD)
         
         # State
         self._attr_hvac_mode = HVACMode.HEAT
@@ -182,6 +199,16 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
         self._last_valve_update = None
         self._last_temp_change = None
         self._last_set_valve_opening = -1  # Track last set value
+        
+        # PID State
+        self._integral_error = 0.0
+        self._prev_error = 0.0
+        self._last_calc_time = None
+        
+        # Debug values
+        self._last_p = 0.0
+        self._last_i = 0.0
+        self._last_d = 0.0
         
         # Configurable parameters (can be changed via number entities)
         self._min_valve_update_interval = 600  # 10 minutes default
@@ -232,9 +259,15 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
                 self._cold_tolerance = self._get_config_value("cold_tolerance", self._config, 0.3)
                 self._hot_tolerance = self._get_config_value("hot_tolerance", self._config, 0.3)
                 self._min_cycle_duration = self._get_config_value("min_cycle_duration", self._config, 300)
-                self._proportional_gain = self._get_config_value("proportional_gain", self._config, 20.0)
-                _LOGGER.debug("%s: Loaded config values from options - hysteresis=%.1f, gain=%.1f", 
-                            self.name, self._hysteresis, self._proportional_gain)
+                
+                # Load PID values
+                legacy_p = self._get_config_value("proportional_gain", self._config, DEFAULT_KP)
+                self._kp = self._get_config_value(CONF_KP, self._config, legacy_p)
+                self._ki = self._get_config_value(CONF_KI, self._config, DEFAULT_KI)
+                self._kd = self._get_config_value(CONF_KD, self._config, DEFAULT_KD)
+                
+                _LOGGER.debug("%s: Loaded config values - hysteresis=%.1f, Kp=%.1f, Ki=%.3f, Kd=%.1f", 
+                            self.name, self._hysteresis, self._kp, self._ki, self._kd)
                 break
         
         # Restore previous state
@@ -243,6 +276,14 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
                 self._attr_hvac_mode = HVACMode(last_state.state)
             if ATTR_TEMPERATURE in last_state.attributes:
                 self._attr_target_temperature = float(last_state.attributes[ATTR_TEMPERATURE])
+                
+            # Restore Integral term (Learning)
+            if ATTR_PID_INTEGRAL in last_state.attributes:
+                try:
+                    self._integral_error = float(last_state.attributes[ATTR_PID_INTEGRAL])
+                    _LOGGER.info("%s: Restored PID integral error: %.2f", self.name, self._integral_error)
+                except (ValueError, TypeError):
+                    self._integral_error = 0.0
         
         # Track temperature sensor
         self._remove_listeners.append(
@@ -576,54 +617,102 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
         return time_since_last_update >= self._min_valve_update_interval
     
     def _calculate_desired_valve_opening(self) -> int:
-        """Calculate desired valve opening based on temperature difference with hysteresis."""
+        """Calculate desired valve opening based on temperature difference (PID)."""
         if self._attr_current_temperature is None or self._attr_target_temperature is None:
             return 0
-        
-        # Temperature difference
-        temp_diff = self._attr_target_temperature - self._attr_current_temperature
         
         # Check if valve is disabled
         if self._max_valve_position == 0:
             return 0
+            
+        current_temp = self._attr_current_temperature
+        target_temp = self._attr_target_temperature
         
-        # Apply hysteresis
-        if temp_diff < -self._hysteresis:
-            # Too warm - close valve
-            desired = 0
-        elif temp_diff > self._hysteresis:
-            # Too cold - open valve proportionally
-            # Use proportional_gain to adjust sensitivity
-            # Higher gain = opens more for same temperature difference
-            # Default gain = 10.0 means 1°C difference -> 10% opening per degree
-            
-            # Calculate proportional opening based on temperature deficit
-            proportion = (temp_diff - self._hysteresis) * self._proportional_gain / 100.0
-            
-            # Apply to max valve position
-            desired = int(proportion * self._max_valve_position)
-            
-            # Cap at maximum
-            desired = min(desired, self._max_valve_position)
+        # Error = Target - Current (Positive when cold/needs heat)
+        error = target_temp - current_temp
+        
+        # PID Time Calculation
+        now = dt_util.now()
+        if self._last_calc_time is None:
+            self._last_calc_time = now
+            dt = 0.0
         else:
-            # In hysteresis zone - maintain current opening
-            # This prevents constant on/off cycling
-            desired = self._last_set_valve_opening if self._last_set_valve_opening >= 0 else 0
+            dt = (now - self._last_calc_time).total_seconds()
+            self._last_calc_time = now
+            
+        # 1. Proportional Term
+        # P = Kp * error
+        p_term = self._kp * error
         
-        # Ensure within bounds
-        desired = max(0, min(self._max_valve_position, desired))
+        # 2. Integral Term (Learning)
+        # Only integrate if we have a valid time delta and error is within reasonable bounds
+        # (Prevent windup if sensor was offline for a long time)
+        i_term = 0.0
+        if dt > 0 and dt < 3600: # Ignore if gap > 1 hour
+            # Accumulate error
+            # Conditional Integration: Stop integrating if output is saturated?
+            # For simplicity: continuous integration with clamping
+            
+            # Deadband for Integral: Don't change integral if error is very small to avoid oscillation
+            if abs(error) >= self._hysteresis:
+                self._integral_error += error * dt
+            
+            # Anti-Windup: Clamp integral error to represent max +/- 100% contribution
+            # If Ki is 0.01, and we want max 100%, max_integral = 100/0.01 = 10000
+            if self._ki > 0:
+                max_integral = 100.0 / self._ki
+                self._integral_error = max(-max_integral, min(max_integral, self._integral_error))
+                
+            i_term = self._ki * self._integral_error
+        else:
+            # First run or restart, just use existing integral
+            i_term = self._ki * self._integral_error
+            
+        # 3. Derivative Term (Damping)
+        # D = Kd * (change in error) / dt
+        d_term = 0.0
+        if dt > 0:
+            d_error = (error - self._prev_error) / dt
+            d_term = self._kd * d_error
+            
+        self._prev_error = error
         
+        # Store terms for debugging
+        self._last_p = p_term
+        self._last_i = i_term
+        self._last_d = d_term
+        
+        # Total Output (Percent)
+        raw_output = p_term + i_term + d_term
+        
+        # Clamp to 0-100%
+        desired_percent = max(0.0, min(100.0, raw_output))
+        
+        # Scale to max_valve_position (e.g. if max is 80%, we map 0-100% PID to 0-80% Valve)
+        # OR: clamp strictly to max_valve_position?
+        # Usually: PID output 0-100% corresponds to valve 0-Max
+        final_desired = int((desired_percent / 100.0) * self._max_valve_position)
+        
+        # Hysteresis / Minimum movement check (Deadband on OUTPUT, not just error)
+        # If we are comfortably close to target, stay put to save battery?
+        # Standard PID is continuous.
+        # But we have `_min_valve_update_interval` managing the battery.
+        # So we can be precise here.
+        
+        # Special case: If error is within hysteresis and we are close to 0, close it?
+        # Legacy behavior mimic:
+        if abs(error) < self._hysteresis and self._control_mode != CONTROL_MODE_PID:
+             # Legacy Proportional Mode behavior override
+             # If someone specifically selects "Proportional" or "Binary", we might want to respect that logic?
+             # But we merged logic. Let's trust PID.
+             pass
+             
         _LOGGER.debug(
-            "%s: Temp diff: %.1f°C, Gain: %.1f, Current opening: %d%%, Desired: %d%%, Max: %d%%",
-            self.name,
-            temp_diff,
-            self._proportional_gain,
-            self._last_set_valve_opening,
-            desired,
-            self._max_valve_position,
+            "%s: PID: Target=%.1f, Curr=%.1f, Err=%.2f, P=%.1f, I=%.1f, D=%.1f, Out=%.1f%%, Final=%d%%",
+            self.name, target_temp, current_temp, error, p_term, i_term, d_term, desired_percent, final_desired
         )
         
-        return desired
+        return final_desired
     
     async def _async_set_valve_opening(self, valve_opening: int) -> None:
         """Set valve opening degree based on preset step."""
@@ -789,6 +878,10 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
             ATTR_VALVE_ADJUSTMENTS: self._valve_adjustments_count,
             "hysteresis": self._hysteresis,
             "min_valve_update_interval": self._min_valve_update_interval,
+            ATTR_PID_P: round(self._last_p, 1),
+            ATTR_PID_I: round(self._last_i, 1),
+            ATTR_PID_D: round(self._last_d, 1),
+            ATTR_PID_INTEGRAL: round(self._integral_error, 2),
         }
         
         # Temperature info
@@ -850,6 +943,8 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
         
         # ✅ WICHTIG: Inertia-Timer zurücksetzen damit Steuerung sofort greift
         self._last_valve_update = None
+        
+        # Reset PID timing? No, keep integrating but update dt next cycle
         
         # ✅ WICHTIG: Kontrolllogik neu ausführen mit neuer Zieltemperatur
         await self._async_control_heating()

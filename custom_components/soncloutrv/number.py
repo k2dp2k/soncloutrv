@@ -10,7 +10,15 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.entity import DeviceInfo
 
-from .const import DOMAIN
+from .const import (
+    DOMAIN,
+    CONF_KP,
+    CONF_KI,
+    CONF_KD,
+    DEFAULT_KP,
+    DEFAULT_KI,
+    DEFAULT_KD,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -52,15 +60,41 @@ async def async_setup_entry(
         SonClouTRVNumber(
             hass,
             config_entry,
-            "proportional_gain",
-            "P-Verstärkung",
-            5.0,
-            50.0,
+            CONF_KP,
+            "PID: P-Gain (Kp)",
+            1.0,
+            100.0,
             1.0,
             "%/°C",
-            "mdi:tune-vertical",
-            20.0,  # Default: 20% per °C
-            "Proportionale Verstärkung: Wie stark das Ventil pro °C Temperaturdifferenz öffnet. Höhere Werte = aggressiver. Standard: 20%/°C.",
+            "mdi:thermometer-lines",
+            DEFAULT_KP,
+            "Proportional-Anteil: Basis-Leistung basierend auf Temperaturdifferenz. Höher = aggressiver.",
+        ),
+        SonClouTRVNumber(
+            hass,
+            config_entry,
+            CONF_KI,
+            "PID: I-Gain (Ki - Lernen)",
+            0.0,
+            0.5,
+            0.001,
+            "%/°C/s",
+            "mdi:chart-bell-curve-cumulative",
+            DEFAULT_KI,
+            "Integral-Anteil: 'Lernt' den Wärmebedarf über die Zeit. Gleicht langfristige Abweichungen aus.",
+        ),
+        SonClouTRVNumber(
+            hass,
+            config_entry,
+            CONF_KD,
+            "PID: D-Gain (Kd - Dämpfung)",
+            0.0,
+            2000.0,
+            10.0,
+            "%/°C/s",
+            "mdi:speedometer-slow",
+            DEFAULT_KD,
+            "Derivative-Anteil: Bremst bei Annäherung ans Ziel um Überschwingen zu vermeiden.",
         ),
     ]
     
@@ -88,6 +122,7 @@ class SonClouTRVNumber(NumberEntity):
         self.hass = hass
         self._config_entry = config_entry
         self._setting_id = setting_id
+        self._attr_translation_key = setting_id
         self._attr_name = f"{config_entry.data['name']} {name}"
         self._attr_unique_id = f"{DOMAIN}_{config_entry.entry_id}_{setting_id}"
         self._attr_native_min_value = min_value
@@ -131,9 +166,17 @@ class SonClouTRVNumber(NumberEntity):
                         # Convert minutes to seconds
                         entity._min_valve_update_interval = int(value * 60)
                         _LOGGER.info("%s: Min valve update interval set to %d minutes", entity.name, int(value))
-                    elif self._setting_id == "proportional_gain":
-                        entity._proportional_gain = value
-                        _LOGGER.info("%s: Proportional gain set to %.1f%%/°C", entity.name, value)
+                    elif self._setting_id == CONF_KP:
+                        entity._kp = value
+                        _LOGGER.info("%s: PID Kp set to %.1f", entity.name, value)
+                    elif self._setting_id == CONF_KI:
+                        entity._ki = value
+                        _LOGGER.info("%s: PID Ki set to %.3f", entity.name, value)
+                    elif self._setting_id == CONF_KD:
+                        entity._kd = value
+                        _LOGGER.info("%s: PID Kd set to %.1f", entity.name, value)
+                    elif self._setting_id == "proportional_gain": # Legacy
+                         entity._kp = value
                     break
             
             if not found:

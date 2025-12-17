@@ -44,6 +44,18 @@
         "name": "Trägheit (Min. Update-Intervall)",
         "state": "Minimale Zeit zwischen Ventil-Anpassungen. Höhere Werte = träger. Empfehlung: 10-20 Min für Fußbodenheizung."
       },
+      "kp": {
+        "name": "PID: P-Verstärkung (Kp)",
+        "state": "Proportionaler Anteil: Basis-Reaktion auf Temperaturabweichung. Höher = stärkeres Öffnen bei Abweichung."
+      },
+      "ki": {
+        "name": "PID: I-Verstärkung (Ki)",
+        "state": "Integraler Anteil: Lernfaktor, gleicht langfristige Abweichungen aus (Lernend)."
+      },
+      "kd": {
+        "name": "PID: D-Verstärkung (Kd)",
+        "state": "Derivativer Anteil: Dämpft Überschwingen bei Annäherung an das Ziel (Overshoot-Schutz)."
+      },
       "proportional_gain": {
         "name": "P-Verstärkung",
         "state": "Proportionale Verstärkung: Wie stark das Ventil pro °C Temperaturdifferenz öffnet. Höhere Werte = aggressiver. Standard: 20%/°C."
@@ -69,7 +81,8 @@
           "options": {
             "state": {
               "binary": "Binär (An/Aus)",
-              "proportional": "Proportional (stufenlos)"
+              "proportional": "Proportional (Legacy)",
+              "pid": "PID (Adaptiv & Lernend)"
             }
           }
         }
@@ -120,6 +133,27 @@
         },
         "proportional_gain": {
           "name": "P-Verstärkung"
+        },
+        "kp": {
+          "name": "PID P-Verstärkung (Kp)"
+        },
+        "ki": {
+          "name": "PID I-Verstärkung (Ki)"
+        },
+        "kd": {
+          "name": "PID D-Verstärkung (Kd)"
+        },
+        "pid_p": {
+          "name": "PID P-Anteil"
+        },
+        "pid_i": {
+          "name": "PID I-Anteil"
+        },
+        "pid_d": {
+          "name": "PID D-Anteil"
+        },
+        "pid_integral_error": {
+          "name": "PID Integral-Summe"
         },
         "last_exercise": {
           "name": "Letzter Verkalkungsschutz"

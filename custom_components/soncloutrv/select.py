@@ -15,6 +15,7 @@ from .const import (
     DOMAIN,
     CONTROL_MODE_BINARY,
     CONTROL_MODE_PROPORTIONAL,
+    CONTROL_MODE_PID,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -66,6 +67,7 @@ class SonClouTRVControlModeSelect(SelectEntity):
         self._attr_options = [
             CONTROL_MODE_BINARY,
             CONTROL_MODE_PROPORTIONAL,
+            CONTROL_MODE_PID,
         ]
         
         # Current value
