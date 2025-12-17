@@ -169,10 +169,18 @@ async def async_setup_entry(
             climate_entity_id = entity.entity_id
             break
     
+    # If not found via config entry linkage, try to find by name match or fallback
     if not climate_entity_id:
-        # Fallback: construct from name
+        # Fallback 1: Try to construct from valve entity input if it is a climate entity
+        if valve_entity.startswith("climate."):
+             climate_entity_id = valve_entity # Use the wrapped entity? No, we need OUR entity.
+        
+        # Fallback 2: Construct expected entity ID from name
         climate_name = config_entry.data.get(CONF_NAME, '').lower().replace(' ', '_')
-        climate_entity_id = f"climate.{climate_name}"
+        # Handle default HA naming normalization (umlauts, etc.) somewhat simply
+        climate_entity_id = f"climate.sontrv_{climate_name}" if not climate_name.startswith("sontrv") else f"climate.{climate_name}"
+        
+        _LOGGER.warning("Could not find climate entity in registry. Guessing ID: %s", climate_entity_id)
     
     _LOGGER.info("Using climate entity ID: %s for sensors", climate_entity_id)
 
