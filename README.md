@@ -12,8 +12,9 @@ SonTRV ist eine Home Assistant Custom Integration **speziell für Flächenheizun
 
 - ✅ **Externe Temperatursensoren** - Präzise Raumtemperaturmessung statt TRV-interner Sensoren
 - 🎯 **Intelligente Hysterese** - Verhindert ständiges Schalten (konfigurierbar: 0,1-2,0°C)
+- 🧠 **PID-Steuerung (Adaptiv)** - Lernt den Wärmebedarf, verhindert Überschwingen und hält die Temperatur präzise
 - ⏱️ **Trägheitssteuerung** - Speziell für träge Flächenheizungssysteme optimiert (1-60 Min einstellbar)
-- 🔄 **Umschaltbarer Steuermodus** - Binär (An/Aus) oder Proportional (stufenlos)
+- 🔄 **Umschaltbarer Steuermodus** - Binär (An/Aus), Proportional (Legacy) oder PID (Adaptiv)
 - 📊 **5 Ventilöffnungsstufen** - Präzise Kontrolle: 0%, 20%, 40%, 60%, 80%, 100%
 - 🛡️ **Verkalkungsschutz** - Automatisches Ventil-Durchbewegen alle 7 Tage
 - 📈 **Umfangreiche Sensoren** - Ventilposition, Batterie, Temperaturdifferenz, Durchschnitt
@@ -94,11 +95,17 @@ Nach der Einrichtung werden automatisch erstellt:
 - `sensor.[name]_temperaturdifferenz` - Soll/Ist Differenz
 - `sensor.[name]_o_ventilposition` - Durchschnitt
 - `sensor.[name]_aktuelle_stufe` - Gewählte Stufe (*, 1-5)
+- `sensor.[name]_pid_p` - PID Proportional-Anteil
+- `sensor.[name]_pid_i` - PID Integral-Anteil (Lernwert)
+- `sensor.[name]_pid_d` - PID Derivative-Anteil (Dämpfung)
 
 ### Einstellungen (Live konfigurierbar)
-- `select.[name]_steuermodus` - Binär oder Proportional (Standard: **Proportional**)
+- `select.[name]_steuermodus` - Binär, Proportional oder **PID** (Standard: **PID**)
 - `number.[name]_hysterese` - 0,1-2,0°C (Standard: 0,5°C)
 - `number.[name]_tragheit_min_update_intervall` - 1-60 Min (Standard: 10 Min)
+- `number.[name]_pid_p_gain_kp` - PID P-Verstärkung
+- `number.[name]_pid_i_gain_ki` - PID I-Verstärkung (Lernfaktor)
+- `number.[name]_pid_d_gain_kd` - PID D-Verstärkung (Dämpfung)
 
 ### Verkalkungsschutz
 - `switch.[name]_verkalkungsschutz` - Auto-Durchbewegen alle 7 Tage
@@ -108,28 +115,30 @@ Nach der Einrichtung werden automatisch erstellt:
 
 ### Steuermodus
 
-Die Integration unterstützt zwei Steuermodi, die über `select.[name]_steuermodus` umgeschaltet werden können:
+Die Integration unterstützt drei Steuermodi, die über `select.[name]_steuermodus` umgeschaltet werden können:
 
-**Proportional (stufenlos)** - ✅ **Standard**
+**PID (Adaptiv & Lernend)** - ✅ **Standard**
+- **Intelligente Regelung**: Kombiniert P (Reaktion), I (Lernen) und D (Vorausschau)
+- **Adaptiv**: Lernt über den I-Anteil (Integral), wie viel Energie konstant benötigt wird, um die Temperatur zu halten
+- **Überschwingschutz**: Der D-Anteil (Derivative) erkennt schnelle Temperaturanstiege und bremst das Heizen rechtzeitig ab
+- **Sanfte Änderungen**: Spezieller Schutz gegen Sprünge bei Zielwertänderung ("Derivative Kick Protection")
+- **Optimal für alle Heizungstypen**, besonders Flächenheizung
+
+**Proportional (stufenlos)** - *Legacy*
 - Ventil öffnet graduell basierend auf Temperaturdifferenz
 - Bei kleiner Differenz: geringe Öffnung
 - Bei großer Differenz (>3°C): maximale Öffnung (gewählte Stufe)
-- **Optimal für Fußbodenheizung** - präzisere Temperaturregelung
+- **Einfach und robust**, aber ohne Lernfunktion
 
 **Binär (An/Aus):**
 - Ventil wird entweder voll geöffnet (auf gewählte Stufe) oder komplett geschlossen
-- Einfache Steuerung, gut für sehr träge Systeme
-- Keine Zwischenwerte
+- Einfache Steuerung, gut für sehr träge Systeme oder Stellantriebe ohne Zwischenpositionen
 
-**Beispiel Proportional-Modus:**
-```
-Zieltemperatur: 22°C
-Aktuelle Temperatur: 20,5°C
-Differenz: 1,5°C
-Gewählte Stufe: 2 (40% max)
-
-→ Ventilöffnung: ~19% (proportional zur Differenz)
-```
+**Beispiel PID-Modus:**
+Der PID-Regler berechnet die Ventilöffnung als Summe aus:
+1. **P-Anteil**: Temperatur ist zu niedrig -> Öffnen
+2. **I-Anteil**: "Es ist dauerhaft 0,5°C zu kalt" -> Öffnung langsam erhöhen und diesen Wert *merken*
+3. **D-Anteil**: "Temperatur steigt sehr schnell" -> Ventil schließen, bevor Ziel erreicht ist (Bremse)
 
 ### Preset-Modi (Ventilöffnungsstufen)
 
@@ -145,13 +154,14 @@ Gewählte Stufe: 2 (40% max)
 ### Empfohlene Einstellungen
 
 **Fußbodenheizung:**
-- Steuermodus: **Proportional**
+- Steuermodus: **PID**
 - Hysterese: 0,5-0,7°C
 - Trägheit: 15-20 Minuten
 - Max. Stufe: 4 (80%)
+- PID: Standardwerte (Kp=20, Ki=0.01, Kd=500)
 
 **Heizkörper:**
-- Steuermodus: **Proportional** oder Binär
+- Steuermodus: **PID** oder Proportional
 - Hysterese: 0,3-0,5°C
 - Trägheit: 5-10 Minuten
 - Max. Stufe: 5 (100%)
@@ -216,6 +226,24 @@ target:
 - Der erste Durchlauf erfolgt 7 Tage nach Aktivierung
 
 ## 📄 Changelog
+
+### v1.3.0 (2025-12-17) - PID Evolution & Architecture 🧠
+
+**Hauptfeatures:**
+- 🧠 **Vollständiger PID-Regler** - Ersetzt einfache proportionale Logik
+  - **P (Proportional)**: Basis-Reaktion (konfigurierbar)
+  - **I (Integral)**: Lernt den stationären Wärmebedarf (Anti-Windup geschützt)
+  - **D (Derivative)**: Bremst bei Annäherung ans Ziel (Überschwingschutz)
+- 🛡️ **Schutzfunktionen**:
+  - "Derivative Kick Protection" verhindert Sprünge bei Sollwert-Änderung
+  - Rauschunterdrückung für stabile Berechnung
+- 🔧 **Live-Tuning**: Kp, Ki, Kd Parameter direkt über UI anpassbar
+
+**Architektur & Optimierung:**
+- 🚦 **Traffic-Optimierung** - Temperatur-Sync zum TRV nur noch bei Änderung > 0.1°C
+- 🏗️ **Refactoring** - Ventil-Training ("Exercise") zentralisiert in Climate-Entity
+- 🔒 **Konfliktfreiheit** - Regelung pausiert automatisch während Ventil-Training
+- 🚀 **Performance** - Caching von Entity-IDs und MQTT-Topics
 
 ### v1.2.2 (2025-12-17) - Wartung & Optimierung 🔧
 
