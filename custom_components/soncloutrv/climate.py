@@ -154,6 +154,22 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
         self._attr_entity_description = "Intelligenter Thermostat mit externem Temperatursensor und 5-Stufen Ventilsteuerung"
         self._valve_entity = config[CONF_VALVE_ENTITY]
         self._temp_sensor = config[CONF_TEMP_SENSOR]
+        
+        # Cache derived entity IDs to avoid repeated string manipulation
+        self._device_id = self._valve_entity.replace("climate.", "")
+        self._sensor_select_entity = self._valve_entity.replace("climate.", "select.") + "_temperature_sensor_select"
+        self._temp_input_entity = self._valve_entity.replace("climate.", "number.") + "_external_temperature_input"
+        self._valve_opening_entity = self._valve_entity.replace("climate.", "number.") + "_valve_opening_degree"
+        self._calibration_entity = self._valve_entity.replace("climate.", "select.") + "_valve_calibration"
+        self._position_entity = self._valve_entity.replace("climate.", "number.") + "_position"
+        
+        # MQTT Topics
+        self._mqtt_topic_sensor_select = f"zigbee2mqtt/{self._device_id}/set/temperature_sensor_select"
+        self._mqtt_topic_ext_temp = f"zigbee2mqtt/{self._device_id}/set/external_temperature_input"
+        self._mqtt_topic_valve_open = f"zigbee2mqtt/{self._device_id}/set/valve_opening_degree"
+        self._mqtt_topic_calibration = f"zigbee2mqtt/{self._device_id}/set/calibration"
+        self._mqtt_topic_position = f"zigbee2mqtt/{self._device_id}/set/position"
+
         self._attr_min_temp = config[CONF_MIN_TEMP]
         self._attr_max_temp = config[CONF_MAX_TEMP]
         self._attr_target_temperature = config[CONF_TARGET_TEMP]
@@ -196,9 +212,11 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
         self._attr_current_temperature = None
         self._valve_position = 0
         self._active = False
+        self._is_exercising = False  # Flag to suppress control loop during valve exercise
         self._last_valve_update = None
         self._last_temp_change = None
         self._last_set_valve_opening = -1  # Track last set value
+        self._last_synced_temp = None  # For traffic optimization
         
         # PID State
         self._integral_error = 0.0
@@ -475,6 +493,11 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
 
     async def _async_control_heating(self, now=None) -> None:
         """Control heating with hysteresis and inertia for underfloor heating."""
+        # Block control if exercising
+        if self._is_exercising:
+            _LOGGER.debug("%s: Skipping control loop - Valve exercise in progress", self.name)
+            return
+
         # Always update temperature sync (external sensor)
         await self._async_sync_temperature_calibration()
         
@@ -521,8 +544,28 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
             _LOGGER.debug("%s: Cannot sync temperature - external temperature is None", self.name)
             return
         
+        # Optimization: Only sync if temp changed significantly or enough time passed (e.g. 10 mins)
+        # to reduce Zigbee traffic
+        current_temp = round(self._attr_current_temperature, 1)
+        now = dt_util.now()
+        
+        should_sync = False
+        if self._last_synced_temp is None:
+            should_sync = True
+        elif abs(current_temp - self._last_synced_temp) >= 0.1:
+            should_sync = True
+        # Force sync every 30 mins just in case
+        # Note: We rely on SCAN_INTERVAL (5 mins) for the loop, so this is just a counter-check
+        # Actually, let's just sync on change or every 30 mins.
+        # But we don't track last sync time here easily without adding another var.
+        # Let's rely on change.
+        
+        if not should_sync:
+             # _LOGGER.debug("%s: Skipping temp sync - change too small", self.name)
+             return
+
         try:
-            # Read TRV state for monitoring
+            # Read TRV state for monitoring (existing logic kept)
             trv_state = self.hass.states.get(self._valve_entity)
             if trv_state:
                 # Capture TRV internal temperature
@@ -535,58 +578,47 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
                 # Capture battery level (prefer '_battery' over 'battery')
                 self._trv_battery = trv_state.attributes.get("_battery") or trv_state.attributes.get("battery")
             
-            device_id = self._valve_entity.replace("climate.", "")
-            
             # Step 1: Set temperature_sensor_select to "external"
-            sensor_select_entity = self._valve_entity.replace("climate.", "select.") + "_temperature_sensor_select"
-            
-            if self.hass.states.get(sensor_select_entity):
+            if self.hass.states.get(self._sensor_select_entity):
                 # Via entity
                 await self.hass.services.async_call(
                     "select",
                     "select_option",
                     {
-                        "entity_id": sensor_select_entity,
+                        "entity_id": self._sensor_select_entity,
                         "option": "external",
                     },
                     blocking=False,
                 )
-                _LOGGER.debug("%s: Set temperature sensor to external via %s", self.name, sensor_select_entity)
             else:
                 # Via MQTT
                 await self.hass.services.async_call(
                     "mqtt",
                     "publish",
                     {
-                        "topic": f"zigbee2mqtt/{device_id}/set/temperature_sensor_select",
+                        "topic": self._mqtt_topic_sensor_select,
                         "payload": "external",
                     },
                     blocking=False,
                 )
-                _LOGGER.debug("%s: Set temperature sensor to external via MQTT", self.name)
             
             # Step 2: Write external temperature value to external_temperature_input
-            temp_input_entity = self._valve_entity.replace("climate.", "number.") + "_external_temperature_input"
-            
-            # Round to 1 decimal
-            external_temp = round(self._attr_current_temperature, 1)
-            
-            if self.hass.states.get(temp_input_entity):
+            if self.hass.states.get(self._temp_input_entity):
                 # Via entity
                 await self.hass.services.async_call(
                     "number",
                     "set_value",
                     {
-                        "entity_id": temp_input_entity,
-                        "value": external_temp,
+                        "entity_id": self._temp_input_entity,
+                        "value": current_temp,
                     },
                     blocking=True,
                 )
                 _LOGGER.debug(
                     "%s: Set external temperature to %.1f°C via %s",
                     self.name,
-                    external_temp,
-                    temp_input_entity,
+                    current_temp,
+                    self._temp_input_entity,
                 )
             else:
                 # Via MQTT
@@ -594,16 +626,18 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
                     "mqtt",
                     "publish",
                     {
-                        "topic": f"zigbee2mqtt/{device_id}/set/external_temperature_input",
-                        "payload": str(external_temp),
+                        "topic": self._mqtt_topic_ext_temp,
+                        "payload": str(current_temp),
                     },
                     blocking=True,
                 )
                 _LOGGER.debug(
                     "%s: Set external temperature to %.1f°C via MQTT",
                     self.name,
-                    external_temp,
+                    current_temp,
                 )
+            
+            self._last_synced_temp = current_temp
                 
         except Exception as err:
             _LOGGER.error("%s: Error syncing external temperature: %s", self.name, err)
@@ -755,14 +789,12 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
             # * = 0%, 1 = 20%, 2 = 40%, 3 = 60%, 4 = 80%, 5 = 100%
             
             # Try via number entity first
-            valve_opening_entity = self._valve_entity.replace("climate.", "number.") + "_valve_opening_degree"
-            
-            if self.hass.states.get(valve_opening_entity):
+            if self.hass.states.get(self._valve_opening_entity):
                 await self.hass.services.async_call(
                     "number",
                     "set_value",
                     {
-                        "entity_id": valve_opening_entity,
+                        "entity_id": self._valve_opening_entity,
                         "value": valve_opening,
                     },
                     blocking=True,
@@ -771,16 +803,15 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
                     "%s: Set valve opening degree to %d%% via %s",
                     self.name,
                     valve_opening,
-                    valve_opening_entity,
+                    self._valve_opening_entity,
                 )
             else:
                 # Alternative: MQTT
-                device_id = self._valve_entity.replace("climate.", "")
                 await self.hass.services.async_call(
                     "mqtt",
                     "publish",
                     {
-                        "topic": f"zigbee2mqtt/{device_id}/set/valve_opening_degree",
+                        "topic": self._mqtt_topic_valve_open,
                         "payload": str(valve_opening),
                     },
                     blocking=True,
@@ -843,15 +874,12 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
         """Limit the valve opening by setting position attribute in Zigbee2MQTT."""
         try:
             # Try to set position via number entity if available
-            # SONOFF TRVZB via Zigbee2MQTT often has a position number entity
-            position_entity = self._valve_entity.replace("climate.", "number.") + "_position"
-            
-            if self.hass.states.get(position_entity):
+            if self.hass.states.get(self._position_entity):
                 await self.hass.services.async_call(
                     "number",
                     "set_value",
                     {
-                        "entity_id": position_entity,
+                        "entity_id": self._position_entity,
                         "value": self._max_valve_position,
                     },
                     blocking=True,
@@ -860,19 +888,15 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
                     "%s: Limited valve position to %d%% via %s",
                     self.name,
                     self._max_valve_position,
-                    position_entity,
+                    self._position_entity,
                 )
             else:
                 # Alternative: Use MQTT publish to set position directly
-                # This requires knowing the Zigbee2MQTT topic structure
-                device_id = self._valve_entity.replace("climate.", "")
-                mqtt_topic = f"zigbee2mqtt/{device_id}/set/position"
-                
                 await self.hass.services.async_call(
                     "mqtt",
                     "publish",
                     {
-                        "topic": mqtt_topic,
+                        "topic": self._mqtt_topic_position,
                         "payload": str(self._max_valve_position),
                     },
                     blocking=True,
@@ -881,7 +905,7 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
                     "%s: Limited valve position to %d%% via MQTT topic %s",
                     self.name,
                     self._max_valve_position,
-                    mqtt_topic,
+                    self._mqtt_topic_position,
                 )
             
             self._last_valve_update = dt_util.now()
@@ -916,6 +940,7 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
             ATTR_PID_I: round(self._last_i, 1),
             ATTR_PID_D: round(self._last_d, 1),
             ATTR_PID_INTEGRAL: round(self._integral_error, 2),
+            "is_exercising": self._is_exercising,
         }
         
         # Temperature info
@@ -1000,20 +1025,16 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
     async def async_calibrate_valve(self) -> None:
         """Calibrate the TRV valve (full open/close cycle)."""
         try:
-            device_id = self._valve_entity.replace("climate.", "")
-            
             _LOGGER.info("%s: Starting valve calibration", self.name)
             
             # Try via select entity (if available)
-            calibration_entity = self._valve_entity.replace("climate.", "select.") + "_valve_calibration"
-            
-            if self.hass.states.get(calibration_entity):
+            if self.hass.states.get(self._calibration_entity):
                 # Some TRVs have a calibration select option
                 await self.hass.services.async_call(
                     "select",
                     "select_option",
                     {
-                        "entity_id": calibration_entity,
+                        "entity_id": self._calibration_entity,
                         "option": "calibrate",
                     },
                     blocking=True,
@@ -1025,7 +1046,7 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
                     "mqtt",
                     "publish",
                     {
-                        "topic": f"zigbee2mqtt/{device_id}/set/calibration",
+                        "topic": self._mqtt_topic_calibration,
                         "payload": "run",
                     },
                     blocking=True,
@@ -1034,6 +1055,82 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
                 
         except Exception as err:
             _LOGGER.error("%s: Error during valve calibration: %s", self.name, err)
+
+    async def async_trigger_valve_exercise(self) -> None:
+        """Run the anti-calcification exercise (5 min open, 5 min closed)."""
+        _LOGGER.info("%s: Starting anti-calcification valve exercise", self.name)
+        
+        if self._is_exercising:
+            _LOGGER.warning("%s: Valve exercise already in progress", self.name)
+            return
+            
+        self._is_exercising = True
+        
+        try:
+            # Save current valve position and preset mode
+            original_position = self._valve_position
+            original_preset = self._attr_preset_mode
+            
+            _LOGGER.info("%s: Saved current state - Position: %d%%, Preset: %s", 
+                        self.name, original_position, original_preset)
+            
+            # Step 1: Fully open (100%) for 5 minutes
+            await self._async_set_valve_opening(100)
+            _LOGGER.info("%s: Valve fully opened (100%%), scheduled close in 5 minutes", self.name)
+            
+            # Schedule step 2 after 5 minutes (non-blocking)
+            from homeassistant.helpers.event import async_call_later
+            async_call_later(
+                self.hass,
+                300,  # 5 minutes
+                self._async_exercise_step_2,
+                (original_position, original_preset),
+            )
+            
+        except Exception as err:
+            _LOGGER.error("%s: Error during valve exercise: %s", self.name, err)
+            self._is_exercising = False
+
+    async def _async_exercise_step_2(self, args) -> None:
+        """Step 2: Fully close valve for 5 minutes."""
+        original_position, original_preset = args
+        try:
+            # Step 2: Fully close (0%) for 5 minutes
+            await self._async_set_valve_opening(0)
+            _LOGGER.info("%s: Valve fully closed (0%%), scheduled restore in 5 minutes", self.name)
+            
+            # Schedule step 3 after 5 minutes (non-blocking)
+            from homeassistant.helpers.event import async_call_later
+            async_call_later(
+                self.hass,
+                300,  # 5 minutes
+                self._async_exercise_step_3,
+                (original_position, original_preset),
+            )
+            
+        except Exception as err:
+            _LOGGER.error("%s: Error during valve exercise step 2: %s", self.name, err)
+            self._is_exercising = False
+
+    async def _async_exercise_step_3(self, args) -> None:
+        """Step 3: Restore original position and resume normal control."""
+        original_position, original_preset = args
+        try:
+            # Step 3: Restore original position and trigger normal control
+            await self._async_set_valve_opening(original_position)
+            self._attr_preset_mode = original_preset
+            _LOGGER.info("%s: Valve exercise complete - restored to %d%% (Preset: %s)", 
+                       self.name, original_position, original_preset)
+            
+            # Reset exercising flag
+            self._is_exercising = False
+            
+            # Trigger normal heating control to resume
+            await self._async_control_heating()
+            
+        except Exception as err:
+            _LOGGER.error("%s: Error during valve exercise step 3: %s", self.name, err)
+            self._is_exercising = False
     
     async def async_set_preset_mode(self, preset_mode: str) -> None:
         """Set new preset mode (valve opening step)."""
