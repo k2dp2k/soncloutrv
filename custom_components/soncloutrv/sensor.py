@@ -24,7 +24,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.event import async_track_state_change_event, async_track_time_interval
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.restore_state import RestoreEntity
-from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers import entity_registry as er, device_registry as dr
 from homeassistant.util import dt as dt_util
 from homeassistant.const import CONF_NAME
 
@@ -48,49 +48,114 @@ async def async_setup_entry(
         _LOGGER.error("No valve_entity found in config")
         return
     
-    base_entity_id = valve_entity.replace('climate.', '')
-    sensors = []
-    
     # === BASIC PROXY SENSORS ===
-    # Battery sensor
-    for battery_suffix in ["_battery", "battery", "_battery_level"]:
-        battery_entity = f"sensor.{base_entity_id}{battery_suffix}"
-        if hass.states.get(battery_entity):
-            sensors.append(SonClouTRVProxySensor(
-                hass, config_entry, battery_entity,
-                "TRV Batterie", "mdi:battery",
-                "Batterieladung des SONOFF TRVZB.",
-            ))
-            _LOGGER.info("Found battery sensor: %s", battery_entity)
-            break
-    else:
-        _LOGGER.warning("No battery sensor found for %s", base_entity_id)
+    # Improved Discovery: Look up entities via device registry if possible
+    entity_reg = er.async_get(hass)
+    device_reg = dr.async_get(hass)
     
-    # Temperature sensor
-    for temp_suffix in ["_local_temperature", "local_temperature", "_temperature", "temperature"]:
-        temp_entity = f"sensor.{base_entity_id}{temp_suffix}"
-        if hass.states.get(temp_entity):
-            sensors.append(SonClouTRVProxySensor(
-                hass, config_entry, temp_entity,
-                "TRV Temperatur", "mdi:thermometer",
-                "Vom SONOFF TRVZB gemessene Temperatur.",
-            ))
-            _LOGGER.info("Found temperature sensor: %s", temp_entity)
-            break
-    else:
-        _LOGGER.warning("No temperature sensor found for %s", base_entity_id)
+    device_id = None
     
-    # Valve position - Try proxy sensor first, fallback to native
-    valve_pos_entity = f"number.{base_entity_id}_valve_opening_degree"
-    if hass.states.get(valve_pos_entity):
+    # Resolve device ID from valve entity
+    valve_entry = entity_reg.async_get(valve_entity)
+    if valve_entry and valve_entry.device_id:
+        device_id = valve_entry.device_id
+        _LOGGER.debug("Resolved device ID %s for valve %s", device_id, valve_entity)
+    
+    # Identify sensors from the same device
+    battery_entity = None
+    temp_entity = None
+    valve_pos_entity = None # Proxy entity from TRV
+    
+    if device_id:
+        # Iterate over all entities of this device
+        device_entities = [
+            entry for entry in entity_reg.entities.values() 
+            if entry.device_id == device_id
+        ]
+        
+        for entry in device_entities:
+            # Skip disabled entities
+            if entry.disabled_by:
+                continue
+                
+            # Match Battery
+            if (entry.device_class == SensorDeviceClass.BATTERY or 
+                entry.original_device_class == SensorDeviceClass.BATTERY or 
+                "battery" in entry.entity_id or 
+                "battery" in (entry.original_name or "").lower()):
+                if not battery_entity: # Take first match
+                    battery_entity = entry.entity_id
+            
+            # Match Temperature (Internal)
+            # Exclude the external sensor we are using for control
+            if (entry.entity_id != config_entry.data.get("temp_sensor") and 
+                (entry.device_class == SensorDeviceClass.TEMPERATURE or 
+                 entry.original_device_class == SensorDeviceClass.TEMPERATURE) and 
+                 ("local" in entry.entity_id or "internal" in entry.entity_id or 
+                  "temperature" in entry.entity_id)):
+                 if not temp_entity:
+                     temp_entity = entry.entity_id
+            
+            # Match Valve Position (if exposed as sensor or number)
+            # Typically "position" or "valve_opening_degree"
+            if ("position" in entry.entity_id or "valve" in entry.entity_id) and \
+               entry.domain in ["sensor", "number"] and \
+               entry.entity_id != valve_entity: # Don't match the climate entity
+                # Avoid matching our own entities (loop)
+                if DOMAIN not in entry.entity_id:
+                     valve_pos_entity = entry.entity_id
+
+    # Fallback to string manipulation if device lookup failed or entities not found
+    base_entity_id = valve_entity.replace('climate.', '')
+    
+    if not battery_entity:
+        for battery_suffix in ["_battery", "battery", "_battery_level"]:
+            candidate = f"sensor.{base_entity_id}{battery_suffix}"
+            if hass.states.get(candidate):
+                battery_entity = candidate
+                break
+                
+    if not temp_entity:
+        for temp_suffix in ["_local_temperature", "local_temperature", "_temperature", "temperature"]:
+            candidate = f"sensor.{base_entity_id}{temp_suffix}"
+            if hass.states.get(candidate):
+                temp_entity = candidate
+                break
+                
+    # Register found sensors
+    if battery_entity:
+        sensors.append(SonClouTRVProxySensor(
+            hass, config_entry, battery_entity,
+            "TRV Batterie", "mdi:battery",
+            "Batterieladung des SONOFF TRVZB.",
+        ))
+        _LOGGER.info("Found battery sensor: %s", battery_entity)
+    else:
+        _LOGGER.warning("No battery sensor found for %s", valve_entity)
+        
+    if temp_entity:
+        sensors.append(SonClouTRVProxySensor(
+            hass, config_entry, temp_entity,
+            "TRV Temperatur", "mdi:thermometer",
+            "Vom SONOFF TRVZB gemessene Temperatur.",
+        ))
+        _LOGGER.info("Found temperature sensor: %s", temp_entity)
+    else:
+        _LOGGER.warning("No temperature sensor found for %s", valve_entity)
+        
+    # Valve position proxy
+    if not valve_pos_entity:
+        candidate = f"number.{base_entity_id}_valve_opening_degree"
+        if hass.states.get(candidate):
+            valve_pos_entity = candidate
+            
+    if valve_pos_entity:
         sensors.append(SonClouTRVProxySensor(
             hass, config_entry, valve_pos_entity,
             "Ventilposition (TRV)", "mdi:valve",
             "Aktuelle Ventilöffnung vom TRV (0-100%).",
         ))
-        _LOGGER.info("Found TRV valve position: %s", valve_pos_entity)
-    else:
-        _LOGGER.warning("TRV valve opening degree entity not found: %s", valve_pos_entity)
+        _LOGGER.info("Found TRV valve position entity: %s", valve_pos_entity)
     
     # === ADVANCED STATISTICS SENSORS ===
     # Find the climate entity ID from entity registry
