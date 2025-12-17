@@ -59,6 +59,7 @@ from .const import (
     DEFAULT_KD,
     DEFAULT_KA,
     CONF_OUTSIDE_TEMP_SENSOR,
+    CONF_WEATHER_ENTITY,
     CONTROL_MODE_BINARY,
     CONTROL_MODE_PROPORTIONAL,
     CONTROL_MODE_PID,
@@ -157,7 +158,8 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
         self._attr_entity_description = "Intelligenter Thermostat mit externem Temperatursensor und 5-Stufen Ventilsteuerung"
         self._valve_entity = config[CONF_VALVE_ENTITY]
         self._temp_sensor = config[CONF_TEMP_SENSOR]
-        self._outside_temp_sensor = config.get(CONF_OUTSIDE_TEMP_SENSOR)
+        # Support both legacy sensor and new weather entity
+        self._outside_temp_sensor = config.get(CONF_WEATHER_ENTITY, config.get(CONF_OUTSIDE_TEMP_SENSOR))
         
         # Cache derived entity IDs to avoid repeated string manipulation
         self._device_id = self._valve_entity.replace("climate.", "")
@@ -295,7 +297,9 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
                 self._ka = self._get_config_value(CONF_KA, self._config, DEFAULT_KA)
                 
                 # Update outside sensor from config if changed in options (re-merge)
-                self._outside_temp_sensor = self._get_config_value(CONF_OUTSIDE_TEMP_SENSOR, self._config, None)
+                # Check for weather entity first, then legacy sensor
+                self._outside_temp_sensor = self._get_config_value(CONF_WEATHER_ENTITY, self._config, 
+                                            self._get_config_value(CONF_OUTSIDE_TEMP_SENSOR, self._config, None))
                 
                 _LOGGER.debug("%s: Loaded config values - hysteresis=%.1f, Kp=%.1f, Ki=%.3f, Kd=%.1f, Ka=%.1f", 
                             self.name, self._hysteresis, self._kp, self._ki, self._kd, self._ka)
@@ -338,7 +342,12 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
             outside_state = self.hass.states.get(self._outside_temp_sensor)
             if outside_state and outside_state.state not in (STATE_UNAVAILABLE, STATE_UNKNOWN):
                 try:
-                    self._outside_temperature = float(outside_state.state)
+                    if outside_state.domain == "weather":
+                        temp = outside_state.attributes.get("temperature")
+                        if temp is not None:
+                            self._outside_temperature = float(temp)
+                    else:
+                        self._outside_temperature = float(outside_state.state)
                 except ValueError:
                     pass
 
@@ -415,7 +424,15 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
         new_state = event.data.get("new_state")
         if new_state is not None and new_state.state not in (STATE_UNAVAILABLE, STATE_UNKNOWN):
             try:
-                self._outside_temperature = float(new_state.state)
+                # Handle weather entities vs sensors
+                if new_state.domain == "weather":
+                    temp = new_state.attributes.get("temperature")
+                    if temp is not None:
+                        self._outside_temperature = float(temp)
+                else:
+                    # Legacy sensor support
+                    self._outside_temperature = float(new_state.state)
+                    
                 # Note: We don't trigger immediate control loop for outside temp changes
                 # as feed-forward is slow-reacting anyway.
             except ValueError:

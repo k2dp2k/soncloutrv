@@ -27,6 +27,7 @@ CONF_KA = "ka"  # Ambient/Outside Gain (Feed-Forward)
 # Legacy support
 CONF_PROPORTIONAL_GAIN = "proportional_gain"
 CONF_OUTSIDE_TEMP_SENSOR = "outside_temp_sensor"
+CONF_WEATHER_ENTITY = "weather_entity"
 
 # Control modes
 CONTROL_MODE_BINARY = "binary"
