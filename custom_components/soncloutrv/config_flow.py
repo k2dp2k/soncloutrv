@@ -44,7 +44,6 @@ from .const import (
     DEFAULT_MAX_VALVE_POSITION,
     DEFAULT_VALVE_OPENING_STEP,
     DEFAULT_CONTROL_MODE,
-    DEFAULT_PROPORTIONAL_GAIN,
 )
 
 _LOGGER = logging.getLogger(__name__)
