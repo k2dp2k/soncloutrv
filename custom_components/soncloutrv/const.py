@@ -23,8 +23,10 @@ CONF_TIME_END = "time_end"
 CONF_KP = "kp"
 CONF_KI = "ki"
 CONF_KD = "kd"
+CONF_KA = "ka"  # Ambient/Outside Gain (Feed-Forward)
 # Legacy support
 CONF_PROPORTIONAL_GAIN = "proportional_gain"
+CONF_OUTSIDE_TEMP_SENSOR = "outside_temp_sensor"
 
 # Control modes
 CONTROL_MODE_BINARY = "binary"
@@ -65,6 +67,7 @@ DEFAULT_CONTROL_MODE = CONTROL_MODE_PID  # PID für Fußbodenheizung
 DEFAULT_KP = 20.0
 DEFAULT_KI = 0.01  # Integral-Gain (Lernfaktor)
 DEFAULT_KD = 500.0  # Derivative-Gain (Overshoot-Bremse, hoch da dt in Sekunden)
+DEFAULT_KA = 0.0  # Feed-Forward Gain (Standard aus, da optional)
 
 # Attributes
 ATTR_VALVE_POSITION = "valve_position"

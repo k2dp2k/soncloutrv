@@ -15,9 +15,11 @@ from .const import (
     CONF_KP,
     CONF_KI,
     CONF_KD,
+    CONF_KA,
     DEFAULT_KP,
     DEFAULT_KI,
     DEFAULT_KD,
+    DEFAULT_KA,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -95,6 +97,19 @@ async def async_setup_entry(
             "mdi:speedometer-slow",
             DEFAULT_KD,
             "Derivative-Anteil: Bremst bei Annäherung ans Ziel um Überschwingen zu vermeiden.",
+        ),
+        SonClouTRVNumber(
+            hass,
+            config_entry,
+            CONF_KA,
+            "Feed-Forward: Außen-Gain (Ka)",
+            0.0,
+            10.0,
+            0.1,
+            "%/°C",
+            "mdi:weather-cloudy-arrow-right",
+            DEFAULT_KA,
+            "Wettergeführte Vorsteuerung: Erhöht Heizleistung bei Kälte draußen (wenn Außensensor konfiguriert).",
         ),
     ]
     
@@ -175,6 +190,9 @@ class SonClouTRVNumber(NumberEntity):
                     elif self._setting_id == CONF_KD:
                         entity._kd = value
                         _LOGGER.info("%s: PID Kd set to %.1f", entity.name, value)
+                    elif self._setting_id == CONF_KA:
+                        entity._ka = value
+                        _LOGGER.info("%s: Feed-Forward Ka set to %.1f", entity.name, value)
                     elif self._setting_id == "proportional_gain": # Legacy
                          entity._kp = value
                     break

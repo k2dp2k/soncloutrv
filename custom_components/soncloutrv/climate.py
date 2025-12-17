@@ -26,7 +26,7 @@ from homeassistant.helpers import entity_platform, device_registry as dr
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.event import (
     async_track_state_change_event,
-    async_track_time_interval,
+    async_track_point_in_time,
 )
 from homeassistant.helpers.restore_state import RestoreEntity
 from homeassistant.helpers.entity import DeviceInfo
@@ -53,9 +53,12 @@ from .const import (
     CONF_KP,
     CONF_KI,
     CONF_KD,
+    CONF_KA,
     DEFAULT_KP,
     DEFAULT_KI,
     DEFAULT_KD,
+    DEFAULT_KA,
+    CONF_OUTSIDE_TEMP_SENSOR,
     CONTROL_MODE_BINARY,
     CONTROL_MODE_PROPORTIONAL,
     CONTROL_MODE_PID,
@@ -154,6 +157,7 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
         self._attr_entity_description = "Intelligenter Thermostat mit externem Temperatursensor und 5-Stufen Ventilsteuerung"
         self._valve_entity = config[CONF_VALVE_ENTITY]
         self._temp_sensor = config[CONF_TEMP_SENSOR]
+        self._outside_temp_sensor = config.get(CONF_OUTSIDE_TEMP_SENSOR)
         
         # Cache derived entity IDs to avoid repeated string manipulation
         self._device_id = self._valve_entity.replace("climate.", "")
@@ -206,14 +210,18 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
         self._kp = config.get(CONF_KP, legacy_p)
         self._ki = config.get(CONF_KI, DEFAULT_KI)
         self._kd = config.get(CONF_KD, DEFAULT_KD)
+        self._ka = config.get(CONF_KA, DEFAULT_KA)
         
         # State
         self._attr_hvac_mode = HVACMode.HEAT
         self._attr_current_temperature = None
+        self._outside_temperature = None  # Store outside temp
         self._valve_position = 0
         self._active = False
         self._is_exercising = False  # Flag to suppress control loop during valve exercise
         self._last_valve_update = None
+        self._next_update_time = None # For adaptive polling
+        self._update_timer = None # Handle to cancel timer
         self._last_temp_change = None
         self._last_set_valve_opening = -1  # Track last set value
         self._last_synced_temp = None  # For traffic optimization
@@ -227,6 +235,7 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
         self._last_p = 0.0
         self._last_i = 0.0
         self._last_d = 0.0
+        self._last_ff = 0.0
         
         # Configurable parameters (can be changed via number entities)
         self._min_valve_update_interval = 600  # 10 minutes default
@@ -283,9 +292,13 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
                 self._kp = self._get_config_value(CONF_KP, self._config, legacy_p)
                 self._ki = self._get_config_value(CONF_KI, self._config, DEFAULT_KI)
                 self._kd = self._get_config_value(CONF_KD, self._config, DEFAULT_KD)
+                self._ka = self._get_config_value(CONF_KA, self._config, DEFAULT_KA)
                 
-                _LOGGER.debug("%s: Loaded config values - hysteresis=%.1f, Kp=%.1f, Ki=%.3f, Kd=%.1f", 
-                            self.name, self._hysteresis, self._kp, self._ki, self._kd)
+                # Update outside sensor from config if changed in options (re-merge)
+                self._outside_temp_sensor = self._get_config_value(CONF_OUTSIDE_TEMP_SENSOR, self._config, None)
+                
+                _LOGGER.debug("%s: Loaded config values - hysteresis=%.1f, Kp=%.1f, Ki=%.3f, Kd=%.1f, Ka=%.1f", 
+                            self.name, self._hysteresis, self._kp, self._ki, self._kd, self._ka)
                 break
         
         # Restore previous state
@@ -312,6 +325,23 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
             )
         )
         
+        # Track outside temperature sensor if configured
+        if self._outside_temp_sensor:
+            self._remove_listeners.append(
+                async_track_state_change_event(
+                    self.hass,
+                    [self._outside_temp_sensor],
+                    self._async_outside_sensor_changed,
+                )
+            )
+            # Initial read
+            outside_state = self.hass.states.get(self._outside_temp_sensor)
+            if outside_state and outside_state.state not in (STATE_UNAVAILABLE, STATE_UNKNOWN):
+                try:
+                    self._outside_temperature = float(outside_state.state)
+                except ValueError:
+                    pass
+
         # Track valve entity
         self._remove_listeners.append(
             async_track_state_change_event(
@@ -321,14 +351,8 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
             )
         )
         
-        # Periodic update
-        self._remove_listeners.append(
-            async_track_time_interval(
-                self.hass,
-                self._async_control_heating,
-                SCAN_INTERVAL,
-            )
-        )
+        # Start Adaptive Polling Loop
+        await self._async_schedule_next_update()
         
         # Wait for TRV entity to be available (MQTT/Z2M startup)
         _LOGGER.info("%s: Waiting for TRV entity %s to be available...", self.name, self._valve_entity)
@@ -377,9 +401,25 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
 
     async def async_will_remove_from_hass(self) -> None:
         """Run when entity will be removed."""
+        if self._update_timer:
+            self._update_timer()
+            self._update_timer = None
+            
         for remove_listener in self._remove_listeners:
             remove_listener()
         self._remove_listeners.clear()
+
+    @callback
+    async def _async_outside_sensor_changed(self, event) -> None:
+        """Handle outside temperature sensor changes."""
+        new_state = event.data.get("new_state")
+        if new_state is not None and new_state.state not in (STATE_UNAVAILABLE, STATE_UNKNOWN):
+            try:
+                self._outside_temperature = float(new_state.state)
+                # Note: We don't trigger immediate control loop for outside temp changes
+                # as feed-forward is slow-reacting anyway.
+            except ValueError:
+                pass
 
     @callback
     async def _async_sensor_changed(self, event) -> None:
@@ -387,6 +427,12 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
         await self._async_update_temp()
         # Immediately sync temperature calibration when sensor changes
         await self._async_sync_temperature_calibration()
+        
+        # Trigger immediate update (cancel sleep)
+        if self._update_timer:
+            self._update_timer() # Cancel existing timer
+            self._update_timer = None
+            
         await self._async_control_heating()
         self._update_extra_attributes()
         self.async_write_ha_state()
@@ -491,11 +537,44 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
             except (ValueError, TypeError):
                 _LOGGER.warning("Unable to update temperature from %s", self._temp_sensor)
 
+    async def _async_schedule_next_update(self) -> None:
+        """Schedule the next update based on stability (Adaptive Polling)."""
+        if self._update_timer:
+            self._update_timer()
+            self._update_timer = None
+            
+        # Determine Interval
+        # Default: 10 minutes (600s)
+        # Stable: 30 minutes (1800s)
+        
+        interval = self._min_valve_update_interval
+        
+        # Check for stability to relax interval
+        if (self._attr_current_temperature and self._attr_target_temperature and
+            abs(self._attr_target_temperature - self._attr_current_temperature) < 0.2 and
+            not self._is_exercising):
+             # System is stable, relax polling
+             # Only if we are in PID mode (steady state)
+             if self._control_mode == CONTROL_MODE_PID:
+                 interval = 1800 # 30 mins
+                 _LOGGER.debug("%s: System stable, relaxing update interval to %ds", self.name, interval)
+        
+        next_update = dt_util.now() + timedelta(seconds=interval)
+        self._next_update_time = next_update
+        
+        self._update_timer = async_track_point_in_time(
+            self.hass,
+            self._async_control_heating,
+            next_update,
+        )
+
     async def _async_control_heating(self, now=None) -> None:
         """Control heating with hysteresis and inertia for underfloor heating."""
         # Block control if exercising
         if self._is_exercising:
             _LOGGER.debug("%s: Skipping control loop - Valve exercise in progress", self.name)
+            # Schedule next check
+            await self._async_schedule_next_update()
             return
 
         # Always update temperature sync (external sensor)
@@ -506,29 +585,37 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
             await self._async_set_trv_off()
             self._active = False
             self.async_write_ha_state()
+            # Still schedule next update to check for mode changes
+            await self._async_schedule_next_update()
             return
         
         # Check if we should update valve opening (inertia)
-        if not self._should_update_valve_opening():
-            _LOGGER.debug("%s: Skipping valve update due to inertia/min cycle time", self.name)
-            self.async_write_ha_state()
-            return
+        # Note: In adaptive polling, we usually only run when scheduled or triggered.
+        # But if triggered by sensor change, we still respect min_valve_update_interval
+        # for the actual VALVE WRITE, but we re-calc PID.
         
         # Calculate desired valve opening based on temperature difference
         desired_opening = self._calculate_desired_valve_opening()
         
-        # Only update if actually different (already protected by inertia/min_cycle)
-        if desired_opening == self._last_set_valve_opening:
-            _LOGGER.debug(
-                "%s: Valve opening unchanged at %d%%, skipping",
-                self.name,
-                desired_opening,
-            )
-            self.async_write_ha_state()
-            return
+        # Only update if actually different OR if enough time passed
+        should_write = False
         
-        # Set valve opening
-        await self._async_set_valve_opening(desired_opening)
+        if self._last_valve_update is None:
+            should_write = True
+        else:
+            time_since_last = (dt_util.now() - self._last_valve_update).total_seconds()
+            if time_since_last >= self._min_valve_update_interval:
+                # Time criterion met, check if value changed
+                if desired_opening != self._last_set_valve_opening:
+                    should_write = True
+                else:
+                    _LOGGER.debug("%s: Valve opening unchanged at %d%%, skipping write", self.name, desired_opening)
+            else:
+                _LOGGER.debug("%s: Min update interval not reached (%ds < %ds), skipping write", 
+                              self.name, time_since_last, self._min_valve_update_interval)
+
+        if should_write:
+            await self._async_set_valve_opening(desired_opening)
         
         # Sync target temperature to TRV
         if self._attr_target_temperature is not None:
@@ -537,6 +624,9 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
         self._active = desired_opening > 0
         self._update_extra_attributes()
         self.async_write_ha_state()
+        
+        # Schedule next run
+        await self._async_schedule_next_update()
     
     async def _async_sync_temperature_calibration(self) -> None:
         """Sync external temperature sensor with TRV via external temperature input."""
@@ -752,13 +842,29 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
 
         self._prev_error = error
         
+        # 4. Feed-Forward Term (Weather Compensation)
+        # FF = (Target - Outside) * Ka
+        # Only if Ka > 0 and outside temp is available
+        ff_term = 0.0
+        if self._ka > 0 and self._outside_temperature is not None:
+            # Delta between desired room temp and outside
+            # The colder outside, the higher this delta -> More heating
+            outside_delta = target_temp - self._outside_temperature
+            
+            # Simple linear model: Ka % per degree difference
+            # E.g. Ka = 0.5, Target=21, Outside=0 -> Delta=21 -> FF = 10.5%
+            # If Outside=15 -> Delta=6 -> FF = 3%
+            if outside_delta > 0:
+                ff_term = self._ka * outside_delta
+                
         # Store terms for debugging
         self._last_p = p_term
         self._last_i = i_term
         self._last_d = d_term
+        self._last_ff = ff_term
         
         # Total Output (Percent)
-        raw_output = p_term + i_term + d_term
+        raw_output = p_term + i_term + d_term + ff_term
         
         # Clamp to 0-100%
         desired_percent = max(0.0, min(100.0, raw_output))
@@ -947,6 +1053,9 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
             ATTR_PID_I: round(self._last_i, 1),
             ATTR_PID_D: round(self._last_d, 1),
             ATTR_PID_INTEGRAL: round(self._integral_error, 2),
+            "pid_ff": round(self._last_ff, 1),
+            "outside_temperature": self._outside_temperature,
+            "next_update": self._next_update_time.isoformat() if self._next_update_time else None,
             "is_exercising": self._is_exercising,
         }
         
@@ -1026,6 +1135,11 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
                         _LOGGER.info("%s: Smart Start - Preloaded PID Integrator to %.1f (Boost)", self.name, self._integral_error)
         
         # ✅ WICHTIG: Kontrolllogik neu ausführen mit neuer Zieltemperatur
+        # Trigger immediate update via timer cancel
+        if self._update_timer:
+            self._update_timer()
+            self._update_timer = None
+            
         await self._async_control_heating()
         
         self._update_extra_attributes()
@@ -1146,7 +1260,7 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
             self._is_exercising = False
             
             # Trigger normal heating control to resume
-            await self._async_control_heating()
+            await self._async_schedule_next_update()
             
         except Exception as err:
             _LOGGER.error("%s: Error during valve exercise step 3: %s", self.name, err)

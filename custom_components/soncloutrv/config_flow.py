@@ -44,6 +44,7 @@ from .const import (
     DEFAULT_MAX_VALVE_POSITION,
     DEFAULT_VALVE_OPENING_STEP,
     DEFAULT_CONTROL_MODE,
+    CONF_OUTSIDE_TEMP_SENSOR,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -133,6 +134,9 @@ class SonClouTRVConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 vol.Required(CONF_TEMP_SENSOR): selector.EntitySelector(
                     selector.EntitySelectorConfig(domain="sensor", device_class="temperature")
                 ),
+                vol.Optional(CONF_OUTSIDE_TEMP_SENSOR): selector.EntitySelector(
+                    selector.EntitySelectorConfig(domain="sensor", device_class="temperature")
+                ),
                 vol.Optional(CONF_MIN_TEMP, default=DEFAULT_MIN_TEMP): vol.All(
                     vol.Coerce(float), vol.Range(min=5, max=35)
                 ),
@@ -186,11 +190,18 @@ class SonClouTRVOptionsFlow(config_entries.OptionsFlow):
         """Manage the options."""
         if user_input is not None:
             # Merge with existing config entry data to preserve required fields
+            # Also preserve optional fields if not in user_input
             merged_data = {**self.config_entry.data, **user_input}
             return self.async_create_entry(title="", data=merged_data)
 
         data_schema = vol.Schema(
             {
+                vol.Optional(
+                    CONF_OUTSIDE_TEMP_SENSOR,
+                    description={"suggested_value": self.config_entry.data.get(CONF_OUTSIDE_TEMP_SENSOR)},
+                ): selector.EntitySelector(
+                    selector.EntitySelectorConfig(domain="sensor", device_class="temperature")
+                ),
                 vol.Optional(
                     CONF_MIN_TEMP,
                     default=self.config_entry.data.get(CONF_MIN_TEMP, DEFAULT_MIN_TEMP),
