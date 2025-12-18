@@ -434,17 +434,30 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
             try:
                 # Handle weather entities vs sensors
                 if new_state.domain == "weather":
+                    # Try standard attributes first
                     temp = new_state.attributes.get("temperature")
+                    
+                    # Fallback: Try 'current_temperature' (some integrations)
+                    if temp is None:
+                        temp = new_state.attributes.get("current_temperature")
+                        
                     if temp is not None:
                         self._outside_temperature = float(temp)
+                        _LOGGER.debug("%s: Updated outside temp from weather entity %s: %.1f°C", 
+                                    self.name, new_state.entity_id, self._outside_temperature)
+                    else:
+                        _LOGGER.warning("%s: Weather entity %s has no 'temperature' attribute", 
+                                      self.name, new_state.entity_id)
                 else:
                     # Legacy sensor support
                     self._outside_temperature = float(new_state.state)
+                    _LOGGER.debug("%s: Updated outside temp from sensor %s: %.1f°C", 
+                                self.name, new_state.entity_id, self._outside_temperature)
                     
                 # Note: We don't trigger immediate control loop for outside temp changes
                 # as feed-forward is slow-reacting anyway.
             except ValueError:
-                pass
+                _LOGGER.warning("%s: Could not parse outside temperature from %s", self.name, new_state.entity_id)
 
     @callback
     async def _async_sensor_changed(self, event) -> None:
