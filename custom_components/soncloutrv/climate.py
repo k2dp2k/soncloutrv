@@ -462,18 +462,44 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
     @callback
     async def _async_sensor_changed(self, event) -> None:
         """Handle temperature sensor changes."""
-        await self._async_update_temp()
-        # Immediately sync temperature calibration when sensor changes
-        await self._async_sync_temperature_calibration()
+        old_state = event.data.get("old_state")
+        new_state = event.data.get("new_state")
         
-        # Trigger immediate update (cancel sleep)
-        if self._update_timer:
-            self._update_timer() # Cancel existing timer
-            self._update_timer = None
+        # Update internal state
+        await self._async_update_temp()
+        
+        # Optimization: Noise Filter
+        # Only trigger immediate control loop if temperature changed significantly (> 0.1°C)
+        # Small fluctuations are handled in the next regular interval to save battery/motor.
+        should_trigger_immediate = False
+        
+        if old_state and new_state and old_state.state not in (STATE_UNAVAILABLE, STATE_UNKNOWN) and new_state.state not in (STATE_UNAVAILABLE, STATE_UNKNOWN):
+            try:
+                old_temp = float(old_state.state)
+                new_temp = float(new_state.state)
+                if abs(new_temp - old_temp) >= 0.1:
+                    should_trigger_immediate = True
+            except ValueError:
+                should_trigger_immediate = True # Fallback on error
+        else:
+            should_trigger_immediate = True # First update or unavailable state
             
-        await self._async_control_heating()
+        # Immediately sync temperature calibration when sensor changes (keep display updated)
+        # Only if change is significant to reduce traffic
+        if should_trigger_immediate:
+            await self._async_sync_temperature_calibration()
+        
+            # Trigger immediate update (cancel sleep)
+            if self._update_timer:
+                self._update_timer() # Cancel existing timer
+                self._update_timer = None
+                
+            await self._async_control_heating()
+        else:
+            # Just update attributes without triggering control logic
+            self.async_write_ha_state()
+            
         self._update_extra_attributes()
-        self.async_write_ha_state()
 
     @callback
     async def _async_valve_changed(self, event) -> None:
