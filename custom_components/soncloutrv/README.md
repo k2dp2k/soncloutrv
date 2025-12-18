@@ -230,6 +230,8 @@ target:
 ### v1.3.0 (2025-12-17) - PID Evolution & Architecture 🧠
 
 **Hauptfeatures:**
+- 🌤️ **Wetter-Vorsteuerung (Feed-Forward)** - Nutzt die Außentemperatur (Wetter-Entität oder Sensor), um Heizbedarf vorherzusehen
+- 🔋 **Adaptive Polling (Eco-Modus)** - Spart Batterie durch reduziertes Funk-Intervall (30 Min) bei stabiler Temperatur
 - 🚀 **Turbo-Start (Smart Start)** - Überwindet die Trägheit beim Starten durch sofortigen I-Boost
 - ⚡ **Dynamischer Gain Boost** - Beschleunigt das Aufheizen bei großen Temperaturdifferenzen (>1,5°C)
 - 🧠 **Vollständiger PID-Regler** - Ersetzt einfache proportionale Logik
