@@ -135,8 +135,8 @@ class SonClouTRVConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 vol.Required(CONF_TEMP_SENSOR): selector.EntitySelector(
                     selector.EntitySelectorConfig(domain="sensor", device_class="temperature")
                 ),
-                vol.Optional(CONF_WEATHER_ENTITY): selector.EntitySelector(
-                    selector.EntitySelectorConfig(domain="weather")
+                vol.Optional(CONF_OUTSIDE_TEMP_SENSOR): selector.EntitySelector(
+                    selector.EntitySelectorConfig(domain=["sensor", "weather"], device_class="temperature")
                 ),
                 vol.Optional(CONF_MIN_TEMP, default=DEFAULT_MIN_TEMP): vol.All(
                     vol.Coerce(float), vol.Range(min=5, max=35)
@@ -201,10 +201,10 @@ class SonClouTRVOptionsFlow(config_entries.OptionsFlow):
         data_schema = vol.Schema(
             {
                 vol.Optional(
-                    CONF_WEATHER_ENTITY,
-                    description={"suggested_value": self.config_entry.data.get(CONF_WEATHER_ENTITY, self.config_entry.data.get(CONF_OUTSIDE_TEMP_SENSOR))},
+                    CONF_OUTSIDE_TEMP_SENSOR,
+                    description={"suggested_value": self.config_entry.data.get(CONF_OUTSIDE_TEMP_SENSOR, self.config_entry.data.get(CONF_WEATHER_ENTITY))},
                 ): selector.EntitySelector(
-                    selector.EntitySelectorConfig(domain="weather")
+                    selector.EntitySelectorConfig(domain=["sensor", "weather"], device_class="temperature")
                 ),
                 vol.Optional(
                     CONF_MIN_TEMP,
