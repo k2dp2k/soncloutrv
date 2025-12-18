@@ -234,6 +234,7 @@ target:
 - 🔋 **Adaptive Polling (Eco-Modus)** - Spart Batterie durch reduziertes Funk-Intervall (30 Min) bei stabiler Temperatur
 - 🚀 **Turbo-Start (Smart Start)** - Überwindet die Trägheit beim Starten durch sofortigen I-Boost
 - ⚡ **Dynamischer Gain Boost** - Beschleunigt das Aufheizen bei großen Temperaturdifferenzen (>1,5°C)
+- 🔇 **Sensor-Rauschfilter** - Ignoriert mikroskopische Temperaturschwankungen (< 0,1°C) für längere Batterielaufzeit
 - 🧠 **Vollständiger PID-Regler** - Ersetzt einfache proportionale Logik
   - **P (Proportional)**: Basis-Reaktion (konfigurierbar)
   - **I (Integral)**: Lernt den stationären Wärmebedarf (Anti-Windup geschützt)
