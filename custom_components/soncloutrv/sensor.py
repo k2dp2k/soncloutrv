@@ -226,6 +226,16 @@ async def async_setup_entry(
         SonClouTRVBatteryStatusSensor(hass, config_entry, base_entity_id),
     ])
     
+    # 6. PID Debug Sensors
+    for pid_attr, name_suffix, icon in [
+        ("pid_p", "PID P-Anteil", "mdi:chart-line-variant"),
+        ("pid_i", "PID I-Anteil", "mdi:chart-line-variant"),
+        ("pid_d", "PID D-Anteil", "mdi:chart-line-variant"),
+        ("pid_ff", "PID Feed-Forward", "mdi:weather-cloudy-arrow-right"),
+        ("pid_integral_error", "PID Integral Summe", "mdi:sigma"),
+    ]:
+        sensors.append(SonClouTRVPIDSensor(hass, config_entry, climate_entity_id, pid_attr, name_suffix, icon))
+    
     async_add_entities(sensors, True)
 
 
@@ -1117,3 +1127,44 @@ class SonClouTRVBatteryStatusSensor(SensorEntity):
             self.async_write_ha_state()
         except (ValueError, TypeError):
             pass
+
+
+# ===== 6. PID DEBUG SENSORS =====
+
+class SonClouTRVPIDSensor(SensorEntity):
+    """Sensor to track internal PID values."""
+
+    def __init__(self, hass, config_entry, climate_entity, attribute, name_suffix, icon):
+        self.hass = hass
+        self._climate_entity = climate_entity
+        self._attribute = attribute
+        self._attr_name = f"{config_entry.data['name']} {name_suffix}"
+        self._attr_unique_id = f"{DOMAIN}_{config_entry.entry_id}_{attribute}"
+        self._attr_icon = icon
+        self._attr_state_class = SensorStateClass.MEASUREMENT
+        # Integral error has no % unit technically, but others do
+        if attribute != "pid_integral_error":
+            self._attr_native_unit_of_measurement = PERCENTAGE
+            
+        self._attr_device_info = get_device_info(config_entry)
+        # Suggest entity to be hidden by default to not clutter UI
+        self._attr_entity_registry_enabled_default = False
+
+    async def async_added_to_hass(self):
+        await super().async_added_to_hass()
+        self._remove_listener = async_track_state_change_event(self.hass, [self._climate_entity], self._update)
+        # Initial update
+        await self._update()
+
+    async def async_will_remove_from_hass(self):
+        if hasattr(self, '_remove_listener'): self._remove_listener()
+
+    @callback
+    async def _update(self, event=None):
+        state = self.hass.states.get(self._climate_entity)
+        if not state: return
+        
+        val = state.attributes.get(self._attribute)
+        if val is not None:
+            self._attr_native_value = float(val)
+            self.async_write_ha_state()
