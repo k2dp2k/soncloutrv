@@ -193,6 +193,10 @@ class SonClouTRVOptionsFlow(config_entries.OptionsFlow):
     ) -> config_entries.FlowResult:
         """Manage the options."""
         if user_input is not None:
+            # Clean up old weather_entity key if present and outside_temp_sensor is used
+            if CONF_OUTSIDE_TEMP_SENSOR in user_input:
+                user_input.pop(CONF_WEATHER_ENTITY, None)
+                
             # Merge with existing config entry data to preserve required fields
             # Also preserve optional fields if not in user_input
             merged_data = {**self.config_entry.data, **user_input}
