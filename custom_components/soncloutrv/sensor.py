@@ -1147,8 +1147,8 @@ class SonClouTRVPIDSensor(SensorEntity):
             self._attr_native_unit_of_measurement = PERCENTAGE
             
         self._attr_device_info = get_device_info(config_entry)
-        # Suggest entity to be hidden by default to not clutter UI
-        self._attr_entity_registry_enabled_default = False
+        # Enable by default for debugging visibility
+        self._attr_entity_registry_enabled_default = True
 
     async def async_added_to_hass(self):
         await super().async_added_to_hass()
