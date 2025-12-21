@@ -87,18 +87,21 @@ class SonClouTRVControlModeSelect(SelectEntity):
         # Update config entry data
         new_data = dict(self._config_entry.data)
         new_data["control_mode"] = option
-        
+
+        # Trigger a config_entry update. Our update listener in __init__.py
+        # (`entry.add_update_listener(async_reload_entry)`) will take care of
+        # unloading/reloading the integration. We do NOT call async_reload
+        # directly here to avoid double reloads and potential race conditions.
         self.hass.config_entries.async_update_entry(
             self._config_entry, data=new_data
         )
-        
+
         _LOGGER.info(
-            "Control mode changed from %s to %s - reloading integration",
+            "Control mode changed from %s to %s (reload handled by update listener)",
             old_option,
             option,
         )
-        
-        # Reload the integration to apply changes immediately
-        await self.hass.config_entries.async_reload(self._config_entry.entry_id)
-        
+
+        # Update our own state immediately; new climate entity will be created
+        # by the reload triggered via the update listener.
         self.async_write_ha_state()
