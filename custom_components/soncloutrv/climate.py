@@ -90,15 +90,23 @@ _LOGGER = logging.getLogger(__name__)
 class RoomPIDState:
     """Shared PID state for all SonTRV climates in the same room.
 
-    A room is currently defined by the external temperature sensor entity id.
-    This class holds the integral term, previous error and last calculation
-    timestamp so that multiple valves in the same room learn together.
+    A room is currently defined by the external temperature sensor entity id
+    (or the explicit ``room_id`` if configured). This class holds the
+    integral term, previous error, last calculation timestamp and the last
+    computed PID output (room heating demand) so that multiple valves in the
+    same room learn together and expose a common debug state.
     """
 
     def __init__(self) -> None:
+        # Integral of the room error over time (shared across all TRVs in room)
         self.integral_error: float = 0.0
+        # Previous error value for derivative calculation
         self.prev_error: float = 0.0
+        # Timestamp of last PID calculation
         self.last_calc_time = None
+        # Last computed PID output in percent (0-100) representing the
+        # *room-level* heating demand. This is used for room debug sensors.
+        self.last_output: float = 0.0
 
 
 SCAN_INTERVAL = timedelta(minutes=5)  # Fußbodenheizung ist träge, 5 Minuten reichen
@@ -1008,6 +1016,9 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
         
         # Clamp to 0-100%
         desired_percent = max(0.0, min(100.0, raw_output))
+        # Store the *room-level* demand in the shared state so that dedicated
+        # room debug sensors can expose this without re-implementing PID logic.
+        state.last_output = desired_percent
         
         # Scale to max_valve_position (e.g. if max is 80%, we map 0-100% PID to 0-80% Valve)
         # OR: clamp strictly to max_valve_position?

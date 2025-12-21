@@ -28,7 +28,7 @@ from homeassistant.helpers import entity_registry as er, device_registry as dr
 from homeassistant.util import dt as dt_util
 from homeassistant.const import CONF_NAME
 
-from .const import DOMAIN, CONF_VALVE_ENTITY
+from .const import DOMAIN, CONF_VALVE_ENTITY, CONF_TEMP_SENSOR, CONF_ROOM_ID
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -159,7 +159,7 @@ async def async_setup_entry(
     # proxies would just duplicate values. We still keep `valve_pos_entity`
     # to drive the advanced statistics sensors below.
     
-    # === ADVANCED STATISTICS SENSORS ===
+    # === ADVANCED STATISTICS & ROOM DEBUG SENSORS ===
     # Find the climate entity ID from entity registry
     entity_reg = er.async_get(hass)
     climate_entity_id = None
@@ -180,11 +180,31 @@ async def async_setup_entry(
         # Fallback 2: Construct expected entity ID from name
         climate_name = config_entry.data.get(CONF_NAME, '').lower().replace(' ', '_')
         # Handle default HA naming normalization (umlauts, etc.) somewhat simply
-        climate_entity_id = f"climate.sontrv_{climate_name}" if not climate_name.startswith("sontrv") else f"climate.{climate_name}"
+        climate_entity_id = (
+            f"climate.sontrv_{climate_name}"
+            if not climate_name.startswith("sontrv")
+            else f"climate.{climate_name}"
+        )
         
         _LOGGER.warning("Could not find climate entity in registry. Guessing ID: %s", climate_entity_id)
     
     _LOGGER.info("Using climate entity ID: %s for sensors", climate_entity_id)
+
+    # === ROOM-LEVEL PID DEBUG SENSOR ===
+    # Determine room key in the same way as the climate entity does so that the
+    # sensor can read the shared RoomPIDState from hass.data[DOMAIN]["room_states"].
+    room_id = config_entry.data.get(CONF_ROOM_ID)
+    temp_sensor = config_entry.data.get(CONF_TEMP_SENSOR)
+    room_key = room_id or temp_sensor
+
+    # Create at most one room sensor per room across all config entries.
+    domain_data = hass.data.setdefault(DOMAIN, {})
+    room_sensor_registry: set[str] = domain_data.setdefault("room_pid_sensors", set())
+
+    if room_key and room_key not in room_sensor_registry and climate_entity_id:
+        sensors.append(SonClouTRVRoomPIDSensor(hass, config_entry, climate_entity_id, room_key))
+        room_sensor_registry.add(room_key)
+        _LOGGER.info("Added room-level PID debug sensor for room '%s'", room_key)
 
     # Always add native SonTRV valve position sensor (reads from climate entity)
     # Pass the found climate_entity_id to avoid looking it up again
@@ -538,6 +558,125 @@ class SonClouTRVNativeValveClosingSensor(SensorEntity):
                 "Error reading valve_position for closing sensor from climate entity: %s",
                 err,
             )
+
+
+class SonClouTRVRoomPIDSensor(SensorEntity):
+    """Room-level PID debug sensor.
+
+    This sensor exposes the shared PID state for a room (identified by
+    ``room_id`` or the external temperature sensor) and shows the current
+    room heating demand in percent as calculated by the PID controller.
+    Additional PID internals are provided as attributes for debugging and
+    tuning.
+    """
+
+    _attr_native_unit_of_measurement = PERCENTAGE
+    _attr_state_class = SensorStateClass.MEASUREMENT
+
+    def __init__(
+        self,
+        hass: HomeAssistant,
+        config_entry: ConfigEntry,
+        climate_entity_id: str,
+        room_key: str,
+    ) -> None:
+        """Initialize the room PID sensor."""
+        self.hass = hass
+        self._config_entry = config_entry
+        self._climate_entity_id = climate_entity_id
+        self._room_key = room_key
+        self._remove_listener = None
+
+        room_name = room_key
+        self._attr_name = f"{config_entry.data[CONF_NAME]} Raum Heizbedarf"
+        self._attr_unique_id = f"{DOMAIN}_{config_entry.entry_id}_room_pid_{room_key}"
+        self._attr_icon = "mdi:home-thermometer"
+        self._attr_native_value = None
+
+        # Device info: group the room sensor with the SonTRV device so it shows
+        # up next to the climate and number entities.
+        self._attr_device_info = DeviceInfo(
+            identifiers={(DOMAIN, config_entry.entry_id)},
+            name=f"SonTRV {config_entry.data[CONF_NAME]}",
+            manufacturer="k2dp2k",
+            model="Smart Thermostat Control",
+            sw_version="1.1.1",
+        )
+
+        self._attr_extra_state_attributes = {
+            "description": "Raum-PID-Debugsensor (gemeinsame Regelung für alle TRVs im Raum)",
+            "room_key": room_name,
+        }
+
+    async def async_added_to_hass(self) -> None:
+        """Register listeners when added to Home Assistant."""
+        await super().async_added_to_hass()
+
+        if not self._climate_entity_id:
+            _LOGGER.error(
+                "Room PID sensor could not find climate entity for config_entry_id: %s",
+                self._config_entry.entry_id,
+            )
+            return
+
+        # Update when the associated climate entity updates; the PID logic runs
+        # in the climate entity, which also updates the shared RoomPIDState.
+        self._remove_listener = async_track_state_change_event(
+            self.hass,
+            [self._climate_entity_id],
+            self._async_climate_changed,
+        )
+
+        # Initial update
+        await self._async_update_from_room_state()
+
+    async def async_will_remove_from_hass(self) -> None:
+        """Clean up listeners when the entity is removed."""
+        if self._remove_listener:
+            self._remove_listener()
+
+    @callback
+    async def _async_climate_changed(self, event) -> None:
+        """Handle climate entity state changes."""
+        await self._async_update_from_room_state()
+        self.async_write_ha_state()
+
+    async def _async_update_from_room_state(self) -> None:
+        """Read the shared RoomPIDState from hass.data and update attributes."""
+        domain_data = self.hass.data.get(DOMAIN)
+        if not domain_data:
+            return
+
+        room_states = domain_data.get("room_states")
+        if not room_states:
+            return
+
+        state = room_states.get(self._room_key)
+        if not state:
+            return
+
+        try:
+            # Main state: last PID output as room heating demand 0-100%
+            last_output = getattr(state, "last_output", None)
+            integral_error = getattr(state, "integral_error", None)
+            prev_error = getattr(state, "prev_error", None)
+            last_calc_time = getattr(state, "last_calc_time", None)
+
+            if last_output is not None:
+                self._attr_native_value = round(float(last_output), 1)
+
+            attrs = dict(self._attr_extra_state_attributes or {})
+            if integral_error is not None:
+                attrs["room_integral_error"] = round(float(integral_error), 3)
+            if prev_error is not None:
+                attrs["room_prev_error"] = round(float(prev_error), 3)
+            if last_calc_time is not None:
+                # Represent as ISO string for easier debugging
+                attrs["room_last_calc_time"] = last_calc_time.isoformat()
+
+            self._attr_extra_state_attributes = attrs
+        except Exception as err:  # pragma: no cover - defensive
+            _LOGGER.error("Error updating room PID sensor for room %s: %s", self._room_key, err)
 
 
 # Helper function for device info
