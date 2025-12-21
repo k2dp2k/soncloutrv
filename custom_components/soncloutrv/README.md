@@ -104,7 +104,7 @@ Nach der Einrichtung werden automatisch erstellt:
 
 ### Einstellungen (Live konfigurierbar)
 - `select.[name]_steuermodus` - Binär, Proportional oder **PID** (Standard: **PID**)
-- `number.[name]_hysterese` - 0,1-2,0°C (Standard: 0,5°C)
+- `number.[name]_hysterese` - 0,1-2,0°C (Standard: 0,2°C)
 - `number.[name]_tragheit_min_update_intervall` - 1-60 Min (Standard: 10 Min)
 - `number.[name]_pid_p_gain_kp` - PID P-Verstärkung
 - `number.[name]_pid_i_gain_ki` - PID I-Verstärkung (Lernfaktor)
@@ -158,7 +158,7 @@ Der PID-Regler berechnet die Ventilöffnung als Summe aus:
 
 **Fußbodenheizung:**
 - Steuermodus: **PID**
-- Hysterese: 0,5-0,7°C
+- Hysterese: 0,2-0,7°C
 - Trägheit: 15-20 Minuten
 - Max. Stufe: 4 (80%)
 - PID: Standardwerte (Kp=20, Ki=0.01, Kd=500)

@@ -188,7 +188,7 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
         self._config_entry = None  # Will be set in async_added_to_hass if available
         
         # Read from config.data (options will be loaded later in async_added_to_hass)
-        self._hysteresis = config.get(CONF_HYSTERESIS, 0.5)
+        self._hysteresis = config.get(CONF_HYSTERESIS, DEFAULT_HYSTERESIS)
         self._cold_tolerance = config.get(CONF_COLD_TOLERANCE, 0.3)
         self._hot_tolerance = config.get(CONF_HOT_TOLERANCE, 0.3)
         self._min_cycle_duration = config.get(CONF_MIN_CYCLE_DURATION, 300)
@@ -288,7 +288,7 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
             if entry.entry_id == self._entry_id:
                 self._config_entry = entry
                 # Re-read values from options now that we have config_entry
-                self._hysteresis = self._get_config_value("hysteresis", self._config, 0.5)
+                self._hysteresis = self._get_config_value("hysteresis", self._config, DEFAULT_HYSTERESIS)
                 self._cold_tolerance = self._get_config_value("cold_tolerance", self._config, 0.3)
                 self._hot_tolerance = self._get_config_value("hot_tolerance", self._config, 0.3)
                 self._min_cycle_duration = self._get_config_value("min_cycle_duration", self._config, 300)

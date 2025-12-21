@@ -47,6 +47,9 @@ async def async_setup_entry(
     if not valve_entity:
         _LOGGER.error("No valve_entity found in config")
         return
+
+    # Collect all sensors we will create for this config entry
+    sensors: list[SensorEntity] = []
     
     # === BASIC PROXY SENSORS ===
     # Improved Discovery: Look up entities via device registry if possible
