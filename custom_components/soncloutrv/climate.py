@@ -162,6 +162,11 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
         self._temp_sensor = config[CONF_TEMP_SENSOR]
         # Support both legacy sensor and new weather entity
         self._outside_temp_sensor = config.get(CONF_WEATHER_ENTITY, config.get(CONF_OUTSIDE_TEMP_SENSOR))
+
+        # Room grouping key (per external temperature sensor). All SonTRV
+        # climates that share the same temp sensor are considered part of
+        # the same "room" and can later share a coordinated PID controller.
+        self._room_key = self._temp_sensor
         
         # Cache derived entity IDs to avoid repeated string manipulation
         self._device_id = self._valve_entity.replace("climate.", "")
@@ -262,6 +267,9 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
         # Listeners
         self._remove_listeners = []
 
+        # Room membership (filled in async_added_to_hass)
+        self._is_room_leader = False
+
     def _get_config_value(self, key: str, config: dict[str, Any], default: Any) -> Any:
         """Get config value from config_entry.options or config.data with fallback to default.
         
@@ -285,6 +293,17 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
     async def async_added_to_hass(self) -> None:
         """Run when entity about to be added."""
         await super().async_added_to_hass()
+
+        # Register in room registry (grouped by external temp sensor).
+        # This does not change behaviour yet, it only tracks which
+        # SonTRV climates share the same room.
+        rooms = self.hass.data.setdefault(DOMAIN, {}).setdefault("rooms", {})
+        room_entities = rooms.setdefault(self._room_key, [])
+        if self not in room_entities:
+            room_entities.append(self)
+        # First entity in list is the temporary "leader" which can be
+        # used later for coordinated room-level PID control.
+        self._is_room_leader = room_entities[0] is self
         
         # Get reference to config_entry from registry
         for entry in self.hass.config_entries.async_entries(DOMAIN):
@@ -428,7 +447,19 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
         if self._update_timer:
             self._update_timer()
             self._update_timer = None
-            
+
+        # Unregister from room registry
+        domain_data = self.hass.data.get(DOMAIN)
+        if domain_data is not None:
+            rooms = domain_data.get("rooms")
+            if rooms is not None:
+                room_entities = rooms.get(self._room_key)
+                if room_entities and self in room_entities:
+                    room_entities.remove(self)
+                    # If room is now empty, remove it from registry
+                    if not room_entities:
+                        rooms.pop(self._room_key, None)
+
         for remove_listener in self._remove_listeners:
             remove_listener()
         self._remove_listeners.clear()

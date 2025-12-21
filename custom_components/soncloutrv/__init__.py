@@ -19,10 +19,16 @@ _LOGGER = logging.getLogger(__name__)
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up SonClouTRV from a config entry."""
     hass.data.setdefault(DOMAIN, {})
+
+    # Per-config-entry storage (existing behaviour)
     hass.data[DOMAIN][entry.entry_id] = {
         "config": entry.data,
         "entities": [],  # Will store entity references
     }
+
+    # Global room registry: groups SonTRV climates by external temperature sensor
+    # so that we can later coordinate PID control per room.
+    hass.data[DOMAIN].setdefault("rooms", {})
 
     try:
         await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
