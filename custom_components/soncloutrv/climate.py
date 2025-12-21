@@ -85,6 +85,21 @@ from .const import (
 
 _LOGGER = logging.getLogger(__name__)
 
+
+class RoomPIDState:
+    """Shared PID state for all SonTRV climates in the same room.
+
+    A room is currently defined by the external temperature sensor entity id.
+    This class holds the integral term, previous error and last calculation
+    timestamp so that multiple valves in the same room learn together.
+    """
+
+    def __init__(self) -> None:
+        self.integral_error: float = 0.0
+        self.prev_error: float = 0.0
+        self.last_calc_time = None
+
+
 SCAN_INTERVAL = timedelta(minutes=5)  # Fußbodenheizung ist träge, 5 Minuten reichen
 
 
@@ -842,8 +857,23 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
         time_since_last_update = (dt_util.now() - self._last_valve_update).total_seconds()
         return time_since_last_update >= self._min_valve_update_interval
     
+    def _get_room_pid_state(self) -> RoomPIDState:
+        """Return (and create if needed) the shared RoomPIDState for this room."""
+        domain_data = self.hass.data.setdefault(DOMAIN, {})
+        room_states = domain_data.setdefault("room_states", {})
+        state = room_states.get(self._room_key)
+        if state is None:
+            state = RoomPIDState()
+            room_states[self._room_key] = state
+        return state
+
     def _calculate_desired_valve_opening(self) -> int:
-        """Calculate desired valve opening based on temperature difference (PID)."""
+        """Calculate desired valve opening based on temperature difference (PID).
+
+        The PID state (integral, previous error, last_calc_time) is shared per
+        room (i.e. per external temperature sensor). This means multiple SonTRV
+        climates in the same room learn together instead of independently.
+        """
         if self._attr_current_temperature is None or self._attr_target_temperature is None:
             return 0
         
@@ -857,14 +887,17 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
         # Error = Target - Current (Positive when cold/needs heat)
         error = target_temp - current_temp
         
+        # Get shared room PID state
+        state = self._get_room_pid_state()
+        
         # PID Time Calculation
         now = dt_util.now()
-        if self._last_calc_time is None:
-            self._last_calc_time = now
+        if state.last_calc_time is None:
+            state.last_calc_time = now
             dt = 0.0
         else:
-            dt = (now - self._last_calc_time).total_seconds()
-            self._last_calc_time = now
+            dt = (now - state.last_calc_time).total_seconds()
+            state.last_calc_time = now
             
         # 1. Proportional Term
         # Optimization: Gain Scheduling (Boost)
@@ -888,13 +921,13 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
             
             # Deadband for Integral: Don't change integral if error is very small to avoid oscillation
             if abs(error) >= self._hysteresis:
-                self._integral_error += error * dt
+                state.integral_error += error * dt
             
             # Anti-Windup: Clamp integral error to represent max +/- 100% contribution
             # If Ki is 0.01, and we want max 100%, max_integral = 100/0.01 = 10000
             if self._ki > 0:
                 max_integral = 100.0 / self._ki
-                self._integral_error = max(-max_integral, min(max_integral, self._integral_error))
+                state.integral_error = max(-max_integral, min(max_integral, state.integral_error))
             
             # Optimization: Conditional Integration
             # If output is saturated (at 0% or 100%) AND error is driving it further into saturation,
@@ -902,10 +935,10 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
             # We calculate P+D first to see if we are saturated? 
             # Simplified: If we are already at max integral and error has same sign, don't add.
             
-            i_term = self._ki * self._integral_error
+            i_term = self._ki * state.integral_error
         else:
             # First run or restart, just use existing integral
-            i_term = self._ki * self._integral_error
+            i_term = self._ki * state.integral_error
             
         # 3. Derivative Term (Damping)
         # Optimization: Calculate derivative based on input (Temperature) instead of Error
@@ -919,7 +952,7 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
             # So dError/dt = - (Current - Prev_Current) / dt
             
             # Using error difference (Standard PID)
-            # d_error = (error - self._prev_error) / dt
+            # d_error = (error - state.prev_error) / dt
             # d_term = self._kd * d_error
             
             # Using input difference (Derivative on Measurement)
@@ -933,7 +966,7 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
             
             # Simple fix for now: standard derivative but with small dt protection
             if dt > 1.0: # Only calculate D if at least 1 second passed to avoid noise
-                 d_error = (error - self._prev_error) / dt
+                 d_error = (error - state.prev_error) / dt
                  d_term = self._kd * d_error
                  
                  # Suppress huge spikes (Derivative Kick protection)
@@ -942,7 +975,7 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
                      _LOGGER.debug("%s: D-Term spike detected (%.1f), suppressing", self.name, d_term)
                      d_term = 0.0
 
-        self._prev_error = error
+        state.prev_error = error
         
         # 4. Feed-Forward Term (Weather Compensation)
         # FF = (Target - Outside) * Ka
@@ -959,7 +992,10 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
             if outside_delta > 0:
                 ff_term = self._ka * outside_delta
                 
-        # Store terms for debugging
+        # Store terms for debugging (entity-local mirrors of shared room state)
+        self._integral_error = state.integral_error
+        self._prev_error = state.prev_error
+        self._last_calc_time = state.last_calc_time
         self._last_p = p_term
         self._last_i = i_term
         self._last_d = d_term
