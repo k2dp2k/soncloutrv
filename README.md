@@ -173,6 +173,9 @@ Der PID-Regler berechnet die Ventilöffnung als Summe aus:
   - `valve_opening_degree` Unterstützung
   - `external_temperature_input` Unterstützung
 
+> Hinweis: Standard-Temperaturbereich bei der Einrichtung ist 6–25°C. Die Maximaltemperatur
+> kannst du in den Optionen pro Thermostat anpassen.
+
 ## 📚 Dokumentation
 
 - **[Integration README](custom_components/soncloutrv/README.md)** - Ausführliche Dokumentation
