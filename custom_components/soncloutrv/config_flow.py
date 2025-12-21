@@ -48,6 +48,10 @@ from .const import (
     DEFAULT_CONTROL_MODE,
     CONF_OUTSIDE_TEMP_SENSOR,
     CONF_WEATHER_ENTITY,
+    CONF_ROOM_LOGGING_ENABLED,
+    CONF_ROOM_LOG_FILE,
+    DEFAULT_ROOM_LOGGING_ENABLED,
+    DEFAULT_ROOM_LOG_FILE,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -218,6 +222,14 @@ class SonClouTRVOptionsFlow(config_entries.OptionsFlow):
                 ): selector.EntitySelector(
                     selector.EntitySelectorConfig(domain=["sensor", "weather"], device_class="temperature")
                 ),
+                vol.Optional(
+                    CONF_ROOM_LOGGING_ENABLED,
+                    default=self.config_entry.data.get(CONF_ROOM_LOGGING_ENABLED, DEFAULT_ROOM_LOGGING_ENABLED),
+                ): cv.boolean,
+                vol.Optional(
+                    CONF_ROOM_LOG_FILE,
+                    default=self.config_entry.data.get(CONF_ROOM_LOG_FILE, DEFAULT_ROOM_LOG_FILE),
+                ): cv.string,
                 vol.Optional(
                     CONF_MIN_TEMP,
                     default=self.config_entry.data.get(CONF_MIN_TEMP, DEFAULT_MIN_TEMP),

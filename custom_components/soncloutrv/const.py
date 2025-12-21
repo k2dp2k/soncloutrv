@@ -25,6 +25,9 @@ CONF_KP = "kp"
 CONF_KI = "ki"
 CONF_KD = "kd"
 CONF_KA = "ka"  # Ambient/Outside Gain (Feed-Forward)
+# Room logging / analysis
+CONF_ROOM_LOGGING_ENABLED = "room_logging_enabled"
+CONF_ROOM_LOG_FILE = "room_log_file"
 # Legacy support
 CONF_PROPORTIONAL_GAIN = "proportional_gain"
 CONF_OUTSIDE_TEMP_SENSOR = "outside_temp_sensor"
@@ -79,6 +82,9 @@ DEFAULT_KP = 20.0
 DEFAULT_KI = 0.01  # Integral-Gain (Lernfaktor)
 DEFAULT_KD = 500.0  # Derivative-Gain (Overshoot-Bremse, hoch da dt in Sekunden)
 DEFAULT_KA = 0.0  # Feed-Forward Gain (Standard aus, da optional)
+# Room logging defaults (for external analysis / ML tuning)
+DEFAULT_ROOM_LOGGING_ENABLED = False
+DEFAULT_ROOM_LOG_FILE = "sontrv_room_log.csv"
 
 # Attributes
 ATTR_VALVE_POSITION = "valve_position"

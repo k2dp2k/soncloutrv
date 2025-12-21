@@ -4,6 +4,8 @@ from __future__ import annotations
 import asyncio
 from datetime import timedelta
 import logging
+import csv
+import os
 from typing import Any
 
 from homeassistant.components.climate import (
@@ -61,6 +63,10 @@ from .const import (
     DEFAULT_KI,
     DEFAULT_KD,
     DEFAULT_KA,
+    CONF_ROOM_LOGGING_ENABLED,
+    CONF_ROOM_LOG_FILE,
+    DEFAULT_ROOM_LOGGING_ENABLED,
+    DEFAULT_ROOM_LOG_FILE,
     CONF_OUTSIDE_TEMP_SENSOR,
     CONF_WEATHER_ENTITY,
     CONTROL_MODE_BINARY,
@@ -192,6 +198,14 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
         # for existing installations without room_id in the config entry).
         self._room_id = config.get(CONF_ROOM_ID)
         self._room_key = self._room_id or self._temp_sensor
+
+        # Room logging configuration (for external ML / analysis)
+        self._room_logging_enabled: bool = config.get(
+            CONF_ROOM_LOGGING_ENABLED, DEFAULT_ROOM_LOGGING_ENABLED
+        )
+        room_log_file = config.get(CONF_ROOM_LOG_FILE, DEFAULT_ROOM_LOG_FILE)
+        # Resolve to absolute path inside HA config directory
+        self._room_log_path = hass.config.path(room_log_file)
         
         # Cache derived entity IDs to avoid repeated string manipulation
         self._device_id = self._valve_entity.replace("climate.", "")
@@ -1024,6 +1038,20 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
         # OR: clamp strictly to max_valve_position?
         # Usually: PID output 0-100% corresponds to valve 0-Max
         final_desired = int((desired_percent / 100.0) * self._max_valve_position)
+
+        # Optional: append a CSV log row for this room for later ML analysis
+        if self._room_logging_enabled:
+            # Use the same timestamp "now" used for dt calculation
+            self.hass.async_add_executor_job(
+                self._append_room_log_row,
+                now,
+                error,
+                desired_percent,
+                final_desired,
+                current_temp,
+                target_temp,
+                self._outside_temperature,
+            )
         
         # Hysteresis / Minimum movement check (Deadband on OUTPUT, not just error)
         # If we are comfortably close to target, stay put to save battery?
@@ -1045,6 +1073,70 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
         )
         
         return final_desired
+
+    def _append_room_log_row(
+        self,
+        timestamp,
+        error: float,
+        room_demand: float,
+        valve_opening: int,
+        current_temp: float,
+        target_temp: float,
+        outside_temp: float | None,
+    ) -> None:
+        """Append a single CSV row with room / valve state for offline analysis.
+
+        This runs in an executor thread to avoid blocking the event loop with
+        file I/O. The file is created on first use and a header row is written
+        once.
+        """
+        try:
+            os.makedirs(os.path.dirname(self._room_log_path), exist_ok=True)
+        except Exception:
+            # If directory creation fails (e.g. empty dirname), ignore and try file write
+            pass
+
+        header = [
+            "timestamp",
+            "room_key",
+            "climate_entity",
+            "room_temp",
+            "target_temp",
+            "error",
+            "room_demand_percent",
+            "valve_opening_percent",
+            "max_valve_position",
+            "outside_temp",
+            "outside_sensor",
+            "hvac_mode",
+            "hvac_action",
+        ]
+
+        row = [
+            timestamp.isoformat() if hasattr(timestamp, "isoformat") else str(timestamp),
+            self._room_key,
+            getattr(self, "entity_id", ""),
+            current_temp,
+            target_temp,
+            error,
+            round(room_demand, 3),
+            valve_opening,
+            self._max_valve_position,
+            outside_temp,
+            self._outside_temp_sensor,
+            getattr(self, "_attr_hvac_mode", None),
+            getattr(self, "_attr_hvac_action", None),
+        ]
+
+        try:
+            file_exists = os.path.isfile(self._room_log_path)
+            with open(self._room_log_path, "a", newline="") as csvfile:
+                writer = csv.writer(csvfile)
+                if not file_exists:
+                    writer.writerow(header)
+                writer.writerow(row)
+        except Exception as err:  # pragma: no cover - defensive
+            _LOGGER.error("%s: Failed to append room log row: %s", self.name, err)
     
     async def _async_set_valve_opening(self, valve_opening: int) -> None:
         """Set valve opening and closing degree on the TRV.
