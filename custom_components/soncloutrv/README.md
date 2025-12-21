@@ -92,7 +92,7 @@ Nach der Einrichtung werden automatisch erstellt:
 
 Bei der Einrichtung kannst du jedem SonTRV einen einfachen Raum zuordnen:
 
-- Es stehen standardmäßig **6 Räume** zur Verfügung: `1`, `2`, `3`, `4`, `5`, `6`.
+- Es stehen standardmäßig **6 Räume** zur Verfügung: `Wohnzimmer`, `Schlafzimmer`, `Bad`, `Küche`, `Flur`, `Büro`.
 - Alle Thermostate mit demselben Raum teilen sich einen gemeinsamen lernenden PID‑Regler.
 - Wenn du keinen Raum explizit auswählst (Bestands-Installationen), wird der Raum automatisch über den verwendeten Temperatursensor gruppiert.
 

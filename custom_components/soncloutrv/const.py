@@ -59,7 +59,15 @@ DEFAULT_NAME = "SonClouTRV"
 DEFAULT_MIN_TEMP = 6.0
 DEFAULT_MAX_TEMP = 25.0
 DEFAULT_TARGET_TEMP = 21.5
-DEFAULT_ROOMS = ["1", "2", "3", "4", "5", "6"]
+# Default room names for simple assignment during setup
+DEFAULT_ROOMS = [
+    "Wohnzimmer",
+    "Schlafzimmer",
+    "Bad",
+    "Küche",
+    "Flur",
+    "Büro",
+]
 DEFAULT_HYSTERESIS = 0.2  # °C
 DEFAULT_COLD_TOLERANCE = 0.3
 DEFAULT_HOT_TOLERANCE = 0.3
