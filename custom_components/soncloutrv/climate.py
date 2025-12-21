@@ -54,6 +54,7 @@ from .const import (
     CONF_KI,
     CONF_KD,
     CONF_KA,
+    DEFAULT_HYSTERESIS,
     DEFAULT_KP,
     DEFAULT_KI,
     DEFAULT_KD,
