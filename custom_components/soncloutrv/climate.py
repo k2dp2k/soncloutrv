@@ -166,6 +166,8 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
         self._sensor_select_entity = self._valve_entity.replace("climate.", "select.") + "_temperature_sensor_select"
         self._temp_input_entity = self._valve_entity.replace("climate.", "number.") + "_external_temperature_input"
         self._valve_opening_entity = self._valve_entity.replace("climate.", "number.") + "_valve_opening_degree"
+        # New: explicit entity for valve_closing_degree so we can keep open/close in sync
+        self._valve_closing_entity = self._valve_entity.replace("climate.", "number.") + "_valve_closing_degree"
         self._calibration_entity = self._valve_entity.replace("climate.", "select.") + "_valve_calibration"
         self._position_entity = self._valve_entity.replace("climate.", "number.") + "_position"
         
@@ -173,6 +175,8 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
         self._mqtt_topic_sensor_select = f"zigbee2mqtt/{self._device_id}/set/temperature_sensor_select"
         self._mqtt_topic_ext_temp = f"zigbee2mqtt/{self._device_id}/set/external_temperature_input"
         self._mqtt_topic_valve_open = f"zigbee2mqtt/{self._device_id}/set/valve_opening_degree"
+        # New: MQTT topic for valve_closing_degree (inverse of opening)
+        self._mqtt_topic_valve_close = f"zigbee2mqtt/{self._device_id}/set/valve_closing_degree"
         self._mqtt_topic_calibration = f"zigbee2mqtt/{self._device_id}/set/calibration"
         self._mqtt_topic_position = f"zigbee2mqtt/{self._device_id}/set/position"
 
@@ -960,12 +964,20 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
         return final_desired
     
     async def _async_set_valve_opening(self, valve_opening: int) -> None:
-        """Set valve opening degree based on preset step."""
+        """Set valve opening and closing degree on the TRV.
+
+        The TRV expects two complementary values:
+        - ``valve_opening_degree``  -> how far the valve is opened in percent
+        - ``valve_closing_degree``  -> how far the valve is closed in percent
+
+        By definition: closing = 100 - opening.
+        """
         try:
-            # Our preset defines the valve opening percentage directly
-            # * = 0%, 1 = 20%, 2 = 40%, 3 = 60%, 4 = 80%, 5 = 100%
-            
-            # Try via number entity first
+            # Clamp opening value defensively
+            valve_opening = max(0, min(100, int(valve_opening)))
+            valve_closing = 100 - valve_opening
+
+            # Try via number entities first (preferred: keeps HA + Z2M in sync)
             if self.hass.states.get(self._valve_opening_entity):
                 await self.hass.services.async_call(
                     "number",
@@ -977,13 +989,13 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
                     blocking=True,
                 )
                 _LOGGER.info(
-                    "%s: Set valve opening degree to %d%% via %s",
+                    "%s: Set valve_opening_degree to %d%% via %s",
                     self.name,
                     valve_opening,
                     self._valve_opening_entity,
                 )
             else:
-                # Alternative: MQTT
+                # Fallback: MQTT publish for opening
                 await self.hass.services.async_call(
                     "mqtt",
                     "publish",
@@ -994,9 +1006,42 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
                     blocking=True,
                 )
                 _LOGGER.info(
-                    "%s: Set valve opening degree to %d%% via MQTT",
+                    "%s: Set valve_opening_degree to %d%% via MQTT",
                     self.name,
                     valve_opening,
+                )
+
+            # Always try to keep valve_closing_degree in sync as 100 - opening
+            if self.hass.states.get(self._valve_closing_entity):
+                await self.hass.services.async_call(
+                    "number",
+                    "set_value",
+                    {
+                        "entity_id": self._valve_closing_entity,
+                        "value": valve_closing,
+                    },
+                    blocking=True,
+                )
+                _LOGGER.info(
+                    "%s: Set valve_closing_degree to %d%% via %s",
+                    self.name,
+                    valve_closing,
+                    self._valve_closing_entity,
+                )
+            else:
+                await self.hass.services.async_call(
+                    "mqtt",
+                    "publish",
+                    {
+                        "topic": self._mqtt_topic_valve_close,
+                        "payload": str(valve_closing),
+                    },
+                    blocking=True,
+                )
+                _LOGGER.info(
+                    "%s: Set valve_closing_degree to %d%% via MQTT",
+                    self.name,
+                    valve_closing,
                 )
             
             # Track last set value and timestamp
@@ -1015,7 +1060,7 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
             self.async_write_ha_state()
             
         except Exception as err:
-            _LOGGER.error("%s: Error setting valve opening degree: %s", self.name, err)
+            _LOGGER.error("%s: Error setting valve opening/closing degree: %s", self.name, err)
     
     async def _async_sync_target_temperature(self) -> None:
         """Sync target temperature to TRV."""

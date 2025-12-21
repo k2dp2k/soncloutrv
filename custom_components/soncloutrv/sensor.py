@@ -64,7 +64,8 @@ async def async_setup_entry(
     # Identify sensors from the same device
     battery_entity = None
     temp_entity = None
-    valve_pos_entity = None # Proxy entity from TRV
+    valve_pos_entity = None  # Proxy entity from TRV (opening)
+    valve_close_entity = None  # Proxy entity from TRV (closing)
     
     if device_id:
         # Iterate over all entities of this device
@@ -143,7 +144,7 @@ async def async_setup_entry(
     else:
         _LOGGER.warning("No temperature sensor found for %s", valve_entity)
         
-    # Valve position proxy
+    # Valve position proxy (opening degree)
     if not valve_pos_entity:
         candidate = f"number.{base_entity_id}_valve_opening_degree"
         if hass.states.get(candidate):
@@ -153,9 +154,23 @@ async def async_setup_entry(
         sensors.append(SonClouTRVProxySensor(
             hass, config_entry, valve_pos_entity,
             "Ventilposition (TRV)", "mdi:valve",
-            "Aktuelle Ventilöffnung vom TRV (0-100%).",
+            "Aktuelle Ventilöffnung vom TRV (0-100%)..",
         ))
-        _LOGGER.info("Found TRV valve position entity: %s", valve_pos_entity)
+        _LOGGER.info("Found TRV valve position entity (opening): %s", valve_pos_entity)
+
+    # Valve closing degree proxy (closing = 100 - opening at TRV level)
+    if not valve_close_entity:
+        candidate = f"number.{base_entity_id}_valve_closing_degree"
+        if hass.states.get(candidate):
+            valve_close_entity = candidate
+
+    if valve_close_entity:
+        sensors.append(SonClouTRVProxySensor(
+            hass, config_entry, valve_close_entity,
+            "Ventilschließgrad (TRV)", "mdi:valve-closed",
+            "Aktueller Ventilschließgrad vom TRV (0-100%)..",
+        ))
+        _LOGGER.info("Found TRV valve closing entity: %s", valve_close_entity)
     
     # === ADVANCED STATISTICS SENSORS ===
     # Find the climate entity ID from entity registry
@@ -188,6 +203,10 @@ async def async_setup_entry(
     # Pass the found climate_entity_id to avoid looking it up again
     sensors.append(SonClouTRVNativeValvePositionSensor(hass, config_entry, climate_entity_id))
     _LOGGER.info("Added native SonTRV valve position sensor")
+
+    # Native closing sensor (100 - valve_position from climate attributes)
+    sensors.append(SonClouTRVNativeValveClosingSensor(hass, config_entry, climate_entity_id))
+    _LOGGER.info("Added native SonTRV valve closing sensor")
     
     # 1. Energy & Efficiency
     sensors.extend([
@@ -416,6 +435,120 @@ class SonClouTRVNativeValvePositionSensor(SensorEntity):
         except (ValueError, TypeError) as err:
             _LOGGER.error(
                 "Error reading valve_position from climate entity: %s",
+                err,
+            )
+
+
+class SonClouTRVNativeValveClosingSensor(SensorEntity):
+    """Native valve closing sensor derived from SonTRV climate entity.
+
+    This sensor computes the closing percentage as ``100 - valve_position``
+    based on the SonTRV climate entity's extra state attributes.
+    """
+
+    def __init__(
+        self,
+        hass: HomeAssistant,
+        config_entry: ConfigEntry,
+        climate_entity_id: str | None = None,
+    ) -> None:
+        """Initialize the native valve closing sensor."""
+        self.hass = hass
+        self._config_entry = config_entry
+        self._climate_entity_id = climate_entity_id
+        self._remove_listener = None
+
+        self._attr_name = f"{config_entry.data[CONF_NAME]} Ventilschließgrad"
+        self._attr_unique_id = f"{DOMAIN}_{config_entry.entry_id}_native_valve_closing"
+        self._attr_icon = "mdi:valve-closed"
+        self._attr_native_unit_of_measurement = PERCENTAGE
+        self._attr_state_class = SensorStateClass.MEASUREMENT
+        self._attr_native_value = None
+
+        # Device info for grouping
+        self._attr_device_info = DeviceInfo(
+            identifiers={(DOMAIN, config_entry.entry_id)},
+            name=f"SonTRV {config_entry.data[CONF_NAME]}",
+            manufacturer="k2dp2k",
+            model="Smart Thermostat Control",
+            sw_version="1.1.1",
+        )
+
+        self._attr_extra_state_attributes = {
+            "description": "Aktueller Ventilschließgrad von SonTRV (100 - Ventilöffnung).",
+            "source": "climate entity attributes",
+        }
+
+    async def async_added_to_hass(self) -> None:
+        """Run when entity about to be added."""
+        await super().async_added_to_hass()
+
+        # If ID was not passed in init, try to find it (fallback)
+        if not self._climate_entity_id:
+            entity_reg = er.async_get(self.hass)
+            for entity in entity_reg.entities.values():
+                if (
+                    entity.config_entry_id == self._config_entry.entry_id
+                    and entity.domain == "climate"
+                ):
+                    self._climate_entity_id = entity.entity_id
+                    _LOGGER.info(
+                        "Native valve closing sensor found climate entity: %s",
+                        self._climate_entity_id,
+                    )
+                    break
+
+        if not self._climate_entity_id:
+            _LOGGER.error(
+                "Native valve closing sensor could not find climate entity for config_entry_id: %s",
+                self._config_entry.entry_id,
+            )
+            return
+
+        # Track climate entity state changes
+        self._remove_listener = async_track_state_change_event(
+            self.hass,
+            [self._climate_entity_id],
+            self._async_climate_changed,
+        )
+
+        # Initial update
+        await self._async_update_from_climate()
+
+    async def async_will_remove_from_hass(self) -> None:
+        """Run when entity will be removed."""
+        if self._remove_listener:
+            self._remove_listener()
+
+    @callback
+    async def _async_climate_changed(self, event) -> None:
+        """Handle climate entity state changes."""
+        await self._async_update_from_climate()
+        self.async_write_ha_state()
+
+    async def _async_update_from_climate(self) -> None:
+        """Update closing degree from climate entity attributes."""
+        if not self._climate_entity_id:
+            return
+
+        climate_state = self.hass.states.get(self._climate_entity_id)
+        if not climate_state:
+            return
+
+        try:
+            valve_position = climate_state.attributes.get("valve_position")
+            if valve_position is not None:
+                opening = int(valve_position)
+                closing = max(0, min(100, 100 - opening))
+                self._attr_native_value = closing
+            else:
+                _LOGGER.debug(
+                    "valve_position attribute not found in climate entity %s (closing sensor)",
+                    self._climate_entity_id,
+                )
+        except (ValueError, TypeError) as err:
+            _LOGGER.error(
+                "Error reading valve_position for closing sensor from climate entity: %s",
                 err,
             )
 

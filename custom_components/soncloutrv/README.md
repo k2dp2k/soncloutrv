@@ -90,8 +90,11 @@ Nach der Einrichtung werden automatisch erstellt:
 
 ### Sensoren (automatisch)
 - `sensor.[name]_ventilposition` - Aktuelle Öffnung (0-100%)
+- `sensor.[name]_ventilschliessgrad` - Aktueller Schließgrad (100% - Öffnung)
 - `sensor.[name]_trv_temperatur` - TRV interne Temperatur
-- `sensor.[name]_trv_batterie` - Batteriestand
+- `sensor.[name]_trv_batterie` - TRV Batteriestand
+- `sensor.[name]_trv_ventilposition` - TRV Ventilöffnung (Proxy)
+- `sensor.[name]_trv_ventilschliessgrad` - TRV Schließgrad (Proxy, 100% - Öffnung)
 - `sensor.[name]_temperaturdifferenz` - Soll/Ist Differenz
 - `sensor.[name]_o_ventilposition` - Durchschnitt
 - `sensor.[name]_aktuelle_stufe` - Gewählte Stufe (*, 1-5)

@@ -4,6 +4,10 @@
 
 Version 1.2.0 fügt **17 neue intelligente Sensoren** hinzu, die detaillierte Einblicke in Energieverbrauch, Ventilgesundheit, Temperaturverhalten, Komfort und Systemstatus bieten.
 
+Zusätzlich stellt SonTRV eigene Basis-Sensoren für Ventilöffnung und Ventilschließgrad bereit
+(sowohl als Proxy direkt vom TRV als auch als native SonTRV-Sensoren). Die hier beschriebenen
+Advanced-Sensoren bauen in vielen Fällen auf diesen Basiswerten auf.
+
 ---
 
 ## 📊 1. Energieverbrauch & Effizienz (4 Sensoren)
