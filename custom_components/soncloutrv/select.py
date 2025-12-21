@@ -16,6 +16,7 @@ from .const import (
     CONTROL_MODE_BINARY,
     CONTROL_MODE_PROPORTIONAL,
     CONTROL_MODE_PID,
+    DEFAULT_CONTROL_MODE,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -70,9 +71,9 @@ class SonClouTRVControlModeSelect(SelectEntity):
             CONTROL_MODE_PID,
         ]
         
-        # Current value
+        # Current value (default: PID, see DEFAULT_CONTROL_MODE)
         self._attr_current_option = config_entry.data.get(
-            "control_mode", CONTROL_MODE_PROPORTIONAL
+            "control_mode", DEFAULT_CONTROL_MODE
         )
 
     async def async_select_option(self, option: str) -> None:

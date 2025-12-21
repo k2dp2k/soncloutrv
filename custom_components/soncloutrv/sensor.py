@@ -147,33 +147,17 @@ async def async_setup_entry(
     else:
         _LOGGER.warning("No temperature sensor found for %s", valve_entity)
         
-    # Valve position proxy (opening degree)
+    # Valve position entity for statistics (opening degree)
     if not valve_pos_entity:
         candidate = f"number.{base_entity_id}_valve_opening_degree"
         if hass.states.get(candidate):
             valve_pos_entity = candidate
-            
-    if valve_pos_entity:
-        sensors.append(SonClouTRVProxySensor(
-            hass, config_entry, valve_pos_entity,
-            "Ventilposition (TRV)", "mdi:valve",
-            "Aktuelle Ventilöffnung vom TRV (0-100%)..",
-        ))
-        _LOGGER.info("Found TRV valve position entity (opening): %s", valve_pos_entity)
 
-    # Valve closing degree proxy (closing = 100 - opening at TRV level)
-    if not valve_close_entity:
-        candidate = f"number.{base_entity_id}_valve_closing_degree"
-        if hass.states.get(candidate):
-            valve_close_entity = candidate
-
-    if valve_close_entity:
-        sensors.append(SonClouTRVProxySensor(
-            hass, config_entry, valve_close_entity,
-            "Ventilschließgrad (TRV)", "mdi:valve-closed",
-            "Aktueller Ventilschließgrad vom TRV (0-100%)..",
-        ))
-        _LOGGER.info("Found TRV valve closing entity: %s", valve_close_entity)
+    # Note: We no longer create separate SonTRV proxy sensors for TRV valve
+    # opening/closing. The native SonTRV sensors (reading from the climate
+    # entity) plus the original TRV entities are sufficient; additional
+    # proxies would just duplicate values. We still keep `valve_pos_entity`
+    # to drive the advanced statistics sensors below.
     
     # === ADVANCED STATISTICS SENSORS ===
     # Find the climate entity ID from entity registry

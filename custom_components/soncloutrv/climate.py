@@ -55,6 +55,7 @@ from .const import (
     CONF_KD,
     CONF_KA,
     DEFAULT_HYSTERESIS,
+    DEFAULT_CONTROL_MODE,
     DEFAULT_KP,
     DEFAULT_KI,
     DEFAULT_KD,
@@ -206,7 +207,8 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
             # New: convert step to percentage
             self._max_valve_position = VALVE_OPENING_STEPS.get(str(valve_step), 80)
         
-        self._control_mode = config.get(CONF_CONTROL_MODE, CONTROL_MODE_BINARY)
+        # Use configured control mode or fall back to global default (PID)
+        self._control_mode = config.get(CONF_CONTROL_MODE, DEFAULT_CONTROL_MODE)
         self._time_control_enabled = config.get(CONF_TIME_CONTROL_ENABLED, False)
         self._time_start = config.get(CONF_TIME_START, "06:00")
         self._time_end = config.get(CONF_TIME_END, "22:00")
