@@ -158,7 +158,7 @@ Der PID-Regler berechnet die Ventilöffnung als Summe aus:
 - Steuermodus: **PID**
 - Hysterese: 0,2-0,7°C
 - Trägheit: 15-20 Minuten
-- Max. Stufe: 4 (80%)
+- Max. Stufe: 2 (40%)
 - PID: Standardwerte (Kp=20, Ki=0.01, Kd=500)
 
 **Heizkörper:**
