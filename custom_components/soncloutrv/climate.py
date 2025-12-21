@@ -50,6 +50,7 @@ from .const import (
     CONF_TIME_START,
     CONF_TIME_END,
     CONF_PROPORTIONAL_GAIN,
+    CONF_ROOM_ID,
     CONF_KP,
     CONF_KI,
     CONF_KD,
@@ -178,10 +179,11 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
         # Support both legacy sensor and new weather entity
         self._outside_temp_sensor = config.get(CONF_WEATHER_ENTITY, config.get(CONF_OUTSIDE_TEMP_SENSOR))
 
-        # Room grouping key (per external temperature sensor). All SonTRV
-        # climates that share the same temp sensor are considered part of
-        # the same "room" and can later share a coordinated PID controller.
-        self._room_key = self._temp_sensor
+        # Room grouping key: prefer explicit room_id if configured, otherwise
+        # fall back to the external temperature sensor (backwards compatible
+        # for existing installations without room_id in the config entry).
+        self._room_id = config.get(CONF_ROOM_ID)
+        self._room_key = self._room_id or self._temp_sensor
         
         # Cache derived entity IDs to avoid repeated string manipulation
         self._device_id = self._valve_entity.replace("climate.", "")

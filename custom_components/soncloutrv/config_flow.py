@@ -16,6 +16,7 @@ from .const import (
     DOMAIN,
     CONF_VALVE_ENTITY,
     CONF_TEMP_SENSOR,
+    CONF_ROOM_ID,
     CONF_MIN_TEMP,
     CONF_MAX_TEMP,
     CONF_TARGET_TEMP,
@@ -37,6 +38,7 @@ from .const import (
     DEFAULT_MIN_TEMP,
     DEFAULT_MAX_TEMP,
     DEFAULT_TARGET_TEMP,
+    DEFAULT_ROOMS,
     DEFAULT_HYSTERESIS,
     DEFAULT_COLD_TOLERANCE,
     DEFAULT_HOT_TOLERANCE,
@@ -132,6 +134,12 @@ class SonClouTRVConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                         integration="mqtt",
                     )
                 ),
+                vol.Optional(CONF_ROOM_ID, default=DEFAULT_ROOMS[0]): selector.SelectSelector(
+                    selector.SelectSelectorConfig(
+                        options=DEFAULT_ROOMS,
+                        mode=selector.SelectSelectorMode.DROPDOWN,
+                    )
+                ),
                 vol.Required(CONF_TEMP_SENSOR): selector.EntitySelector(
                     selector.EntitySelectorConfig(domain="sensor", device_class="temperature")
                 ),
@@ -218,6 +226,15 @@ class SonClouTRVOptionsFlow(config_entries.OptionsFlow):
                     CONF_MAX_TEMP,
                     default=self.config_entry.data.get(CONF_MAX_TEMP, DEFAULT_MAX_TEMP),
                 ): vol.All(vol.Coerce(float), vol.Range(min=5, max=35)),
+                vol.Optional(
+                    CONF_ROOM_ID,
+                    default=self.config_entry.data.get(CONF_ROOM_ID, DEFAULT_ROOMS[0]),
+                ): selector.SelectSelector(
+                    selector.SelectSelectorConfig(
+                        options=DEFAULT_ROOMS,
+                        mode=selector.SelectSelectorMode.DROPDOWN,
+                    )
+                ),
                 vol.Optional(
                     CONF_TARGET_TEMP,
                     default=self.config_entry.data.get(CONF_TARGET_TEMP, DEFAULT_TARGET_TEMP),

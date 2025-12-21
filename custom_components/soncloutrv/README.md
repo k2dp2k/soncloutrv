@@ -88,6 +88,14 @@ Nach der Einrichtung werden automatisch erstellt:
 ### Haupt-Thermostat
 - `climate.sontrv_[name]` - Steuerung mit Preset-Modi
 
+### Raumzuordnung
+
+Bei der Einrichtung kannst du jedem SonTRV einen einfachen Raum zuordnen:
+
+- Es stehen standardmäßig **6 Räume** zur Verfügung: `1`, `2`, `3`, `4`, `5`, `6`.
+- Alle Thermostate mit demselben Raum teilen sich einen gemeinsamen lernenden PID‑Regler.
+- Wenn du keinen Raum explizit auswählst (Bestands-Installationen), wird der Raum automatisch über den verwendeten Temperatursensor gruppiert.
+
 ### Sensoren (automatisch)
 - `sensor.[name]_ventilposition` - Aktuelle Öffnung (0-100%)
 - `sensor.[name]_ventilschliessgrad` - Aktueller Schließgrad (100% - Öffnung)
