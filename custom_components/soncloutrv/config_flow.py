@@ -230,11 +230,17 @@ class SonClouTRVOptionsFlow(config_entries.OptionsFlow):
                 ),
                 vol.Optional(
                     CONF_ROOM_LOGGING_ENABLED,
-                    default=self.config_entry.data.get(CONF_ROOM_LOGGING_ENABLED, DEFAULT_ROOM_LOGGING_ENABLED),
+                    default=self.config_entry.options.get(
+                        CONF_ROOM_LOGGING_ENABLED,
+                        self.config_entry.data.get(CONF_ROOM_LOGGING_ENABLED, DEFAULT_ROOM_LOGGING_ENABLED),
+                    ),
                 ): cv.boolean,
                 vol.Optional(
                     CONF_ROOM_LOG_FILE,
-                    default=self.config_entry.data.get(CONF_ROOM_LOG_FILE, DEFAULT_ROOM_LOG_FILE),
+                    default=self.config_entry.options.get(
+                        CONF_ROOM_LOG_FILE,
+                        self.config_entry.data.get(CONF_ROOM_LOG_FILE, DEFAULT_ROOM_LOG_FILE),
+                    ),
                 ): cv.string,
                 vol.Optional(
                     CONF_WINDOW_DROP_THRESHOLD,
