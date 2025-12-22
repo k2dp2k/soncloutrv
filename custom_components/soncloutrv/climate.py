@@ -129,6 +129,8 @@ SCAN_INTERVAL = timedelta(minutes=5)  # Fußbodenheizung ist träge, 5 Minuten r
 WINDOW_DROP_THRESHOLD = DEFAULT_WINDOW_DROP_THRESHOLD
 WINDOW_STABLE_BAND = DEFAULT_WINDOW_STABLE_BAND
 WINDOW_MAX_FREEZE = DEFAULT_WINDOW_MAX_FREEZE
+# Time window (in seconds) to look back for sudden drop detection
+WINDOW_DROP_WINDOW = 300  # 5 minutes
 
 
 async def async_setup_entry(
@@ -318,7 +320,8 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
         # Statistics
         self._valve_adjustments_count = 0
         self._valve_position_history = []  # Keep last 10 values
-        self._temp_history = []  # Keep last 5 temperature readings
+        self._temp_history = []  # Keep last N temperature readings
+        self._temp_time_history = []  # Timestamps for temperature readings
         self._trv_internal_temp = None
         self._trv_battery = None
         
@@ -610,9 +613,26 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
                 delta = new_temp - old_temp
                 if abs(delta) >= 0.1:
                     should_trigger_immediate = True
-                # Detect sudden negative jump -> assume window/door opened
+                
+                # 1) Single-step Erkennung: sehr plötzlicher Sprung
                 if delta <= -self._window_drop_threshold:
                     sudden_drop_detected = True
+                
+                # 2) Zeitfenster-Erkennung: Wenn die Temperatur innerhalb der
+                #    letzten WINDOW_DROP_WINDOW Sekunden deutlich gefallen ist
+                #    (bezogen auf das Maximum in diesem Fenster), werten wir
+                #    das ebenfalls als Fenster-/Tür-Öffnung.
+                if self._temp_history and self._temp_time_history:
+                    now = dt_util.now()
+                    window_start = now - timedelta(seconds=WINDOW_DROP_WINDOW)
+                    recent_values: list[float] = []
+                    for value, ts in zip(self._temp_history, self._temp_time_history):
+                        if ts >= window_start:
+                            recent_values.append(value)
+                    if recent_values:
+                        recent_max = max(recent_values)
+                        if recent_max - new_temp >= self._window_drop_threshold:
+                            sudden_drop_detected = True
             except ValueError:
                 should_trigger_immediate = True # Fallback on error
         else:
@@ -735,10 +755,14 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
                 new_temp = float(temp_state.state)
                 self._attr_current_temperature = new_temp
                 
-                # Update temperature history for trend
+                # Update temperature history for trend and window detection
+                now = dt_util.now()
                 self._temp_history.append(new_temp)
-                if len(self._temp_history) > 5:
+                self._temp_time_history.append(now)
+                # Keep a reasonable history length (e.g. last 20 readings)
+                if len(self._temp_history) > 20:
                     self._temp_history.pop(0)
+                    self._temp_time_history.pop(0)
                     
             except (ValueError, TypeError):
                 _LOGGER.warning("Unable to update temperature from %s", self._temp_sensor)
