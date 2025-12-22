@@ -199,11 +199,13 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
         self._room_id = config.get(CONF_ROOM_ID)
         self._room_key = self._room_id or self._temp_sensor
 
-        # Room logging configuration (for external ML / analysis)
-        self._room_logging_enabled: bool = config.get(
-            CONF_ROOM_LOGGING_ENABLED, DEFAULT_ROOM_LOGGING_ENABLED
-        )
-        room_log_file = config.get(CONF_ROOM_LOG_FILE, DEFAULT_ROOM_LOG_FILE)
+        # Room logging configuration (for external ML / analysis).
+        # We initialize with defaults here; final values (including options
+        # from the config entry) are loaded in async_added_to_hass via
+        # _get_config_value so that changes in the options flow take effect
+        # without re-creating the config entry.
+        self._room_logging_enabled: bool = DEFAULT_ROOM_LOGGING_ENABLED
+        room_log_file = DEFAULT_ROOM_LOG_FILE
         # Resolve to absolute path inside HA config directory
         self._room_log_path = hass.config.path(room_log_file)
         
@@ -360,6 +362,19 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
                 self._ki = self._get_config_value(CONF_KI, self._config, DEFAULT_KI)
                 self._kd = self._get_config_value(CONF_KD, self._config, DEFAULT_KD)
                 self._ka = self._get_config_value(CONF_KA, self._config, DEFAULT_KA)
+
+                # Room logging configuration (may come from options)
+                self._room_logging_enabled = self._get_config_value(
+                    CONF_ROOM_LOGGING_ENABLED,
+                    self._config,
+                    DEFAULT_ROOM_LOGGING_ENABLED,
+                )
+                room_log_file = self._get_config_value(
+                    CONF_ROOM_LOG_FILE,
+                    self._config,
+                    DEFAULT_ROOM_LOG_FILE,
+                )
+                self._room_log_path = self.hass.config.path(room_log_file)
                 
                 # Update outside sensor from config if changed in options (re-merge)
                 # Check for weather entity first, then legacy sensor
