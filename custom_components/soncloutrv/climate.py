@@ -910,6 +910,10 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
         
         # Error = Target - Current (Positive when cold/needs heat)
         error = target_temp - current_temp
+
+        # Only "learn" (update integral etc.) when heating is actually enabled.
+        # Otherwise summer/off-periods would distort the shared room PID state.
+        heating_on = self._attr_hvac_mode == HVACMode.HEAT
         
         # Get shared room PID state
         state = self._get_room_pid_state()
@@ -936,9 +940,10 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
         
         # 2. Integral Term (Learning)
         # Only integrate if we have a valid time delta and error is within reasonable bounds
-        # (Prevent windup if sensor was offline for a long time)
+        # (Prevent windup if sensor was offline for a long time). Additionally,
+        # only learn when heating is actually enabled (HVACMode.HEAT).
         i_term = 0.0
-        if dt > 0 and dt < 3600: # Ignore if gap > 1 hour
+        if dt > 0 and dt < 3600 and heating_on: # Ignore if gap > 1 hour or heating off
             # Accumulate error
             # Conditional Integration: Stop integrating if output is saturated?
             # For simplicity: continuous integration with clamping
@@ -1039,8 +1044,10 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
         # Usually: PID output 0-100% corresponds to valve 0-Max
         final_desired = int((desired_percent / 100.0) * self._max_valve_position)
 
-        # Optional: append a CSV log row for this room for later ML analysis
-        if self._room_logging_enabled:
+        # Optional: append a CSV log row for this room for later ML analysis.
+        # We only log when heating is enabled so the dataset reflects periods
+        # where the TRVs actually work against the building inertia.
+        if self._room_logging_enabled and heating_on:
             # Use the same timestamp "now" used for dt calculation
             self.hass.async_add_executor_job(
                 self._append_room_log_row,
