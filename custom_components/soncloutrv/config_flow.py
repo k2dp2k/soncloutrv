@@ -215,9 +215,11 @@ class SonClouTRVOptionsFlow(config_entries.OptionsFlow):
             if CONF_OUTSIDE_TEMP_SENSOR in user_input:
                 user_input.pop(CONF_WEATHER_ENTITY, None)
                 
-            # Merge with existing config entry data to preserve required fields
-            # Also preserve optional fields if not in user_input
-            merged_data = {**self.config_entry.data, **user_input}
+            # Merge with existing config entry data and options to preserve
+            # both required and optional fields. Options should override data
+            # for the same keys, and the new user_input should override both.
+            base = {**self.config_entry.data, **self.config_entry.options}
+            merged_data = {**base, **user_input}
             return self.async_create_entry(title="", data=merged_data)
 
         data_schema = vol.Schema(
