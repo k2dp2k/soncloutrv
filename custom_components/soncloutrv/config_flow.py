@@ -52,6 +52,12 @@ from .const import (
     CONF_ROOM_LOG_FILE,
     DEFAULT_ROOM_LOGGING_ENABLED,
     DEFAULT_ROOM_LOG_FILE,
+    CONF_WINDOW_DROP_THRESHOLD,
+    CONF_WINDOW_STABLE_BAND,
+    CONF_WINDOW_MAX_FREEZE,
+    DEFAULT_WINDOW_DROP_THRESHOLD,
+    DEFAULT_WINDOW_STABLE_BAND,
+    DEFAULT_WINDOW_MAX_FREEZE,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -230,6 +236,18 @@ class SonClouTRVOptionsFlow(config_entries.OptionsFlow):
                     CONF_ROOM_LOG_FILE,
                     default=self.config_entry.data.get(CONF_ROOM_LOG_FILE, DEFAULT_ROOM_LOG_FILE),
                 ): cv.string,
+                vol.Optional(
+                    CONF_WINDOW_DROP_THRESHOLD,
+                    default=self.config_entry.data.get(CONF_WINDOW_DROP_THRESHOLD, DEFAULT_WINDOW_DROP_THRESHOLD),
+                ): vol.All(vol.Coerce(float), vol.Range(min=0.1, max=5.0)),
+                vol.Optional(
+                    CONF_WINDOW_STABLE_BAND,
+                    default=self.config_entry.data.get(CONF_WINDOW_STABLE_BAND, DEFAULT_WINDOW_STABLE_BAND),
+                ): vol.All(vol.Coerce(float), vol.Range(min=0.1, max=2.0)),
+                vol.Optional(
+                    CONF_WINDOW_MAX_FREEZE,
+                    default=self.config_entry.data.get(CONF_WINDOW_MAX_FREEZE, DEFAULT_WINDOW_MAX_FREEZE),
+                ): vol.All(vol.Coerce(int), vol.Range(min=60, max=7200)),
                 vol.Optional(
                     CONF_MIN_TEMP,
                     default=self.config_entry.data.get(CONF_MIN_TEMP, DEFAULT_MIN_TEMP),

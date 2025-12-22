@@ -32,6 +32,10 @@ CONF_ROOM_LOG_FILE = "room_log_file"
 CONF_PROPORTIONAL_GAIN = "proportional_gain"
 CONF_OUTSIDE_TEMP_SENSOR = "outside_temp_sensor"
 CONF_WEATHER_ENTITY = "weather_entity"
+# Window / sudden temperature drop detection
+CONF_WINDOW_DROP_THRESHOLD = "window_drop_threshold"
+CONF_WINDOW_STABLE_BAND = "window_stable_band"
+CONF_WINDOW_MAX_FREEZE = "window_max_freeze"
 
 # Control modes
 CONTROL_MODE_BINARY = "binary"
@@ -85,6 +89,10 @@ DEFAULT_KA = 0.0  # Feed-Forward Gain (Standard aus, da optional)
 # Room logging defaults (for external analysis / ML tuning)
 DEFAULT_ROOM_LOGGING_ENABLED = False
 DEFAULT_ROOM_LOG_FILE = "sontrv_room_log.csv"
+# Window detection defaults
+DEFAULT_WINDOW_DROP_THRESHOLD = 0.8  # °C Sprung nach unten zwischen zwei Messungen
+DEFAULT_WINDOW_STABLE_BAND = 0.3     # °C Bandbreite für "stabil wieder"
+DEFAULT_WINDOW_MAX_FREEZE = 1800     # Sekunden (30 Minuten) maximale Einfrierzeit
 
 # Attributes
 ATTR_VALVE_POSITION = "valve_position"

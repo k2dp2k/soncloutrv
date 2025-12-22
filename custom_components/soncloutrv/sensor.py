@@ -250,6 +250,7 @@ async def async_setup_entry(
         SonClouTRVConnectionStatusSensor(hass, config_entry, valve_entity),
         SonClouTRVLastUpdateSensor(hass, config_entry, valve_entity),
         SonClouTRVBatteryStatusSensor(hass, config_entry, base_entity_id),
+        SonClouTRVWindowStateSensor(hass, config_entry, climate_entity_id),
     ])
     
     # 6. PID Debug Sensors
@@ -558,6 +559,116 @@ class SonClouTRVNativeValveClosingSensor(SensorEntity):
                 "Error reading valve_position for closing sensor from climate entity: %s",
                 err,
             )
+
+
+class SonClouTRVWindowStateSensor(SensorEntity):
+    """Sensor that exposes the detected window state (open/closed).
+
+    This is derived from the SonTRV climate entity's internal window
+    detection (sudden temperature drops). It shows "offen" when a
+    window- or door-open situation is active, otherwise "geschlossen".
+    """
+
+    def __init__(
+        self,
+        hass: HomeAssistant,
+        config_entry: ConfigEntry,
+        climate_entity_id: str | None = None,
+    ) -> None:
+        """Initialize the window state sensor."""
+        self.hass = hass
+        self._config_entry = config_entry
+        self._climate_entity_id = climate_entity_id
+        self._remove_listener = None
+
+        self._attr_name = f"{config_entry.data[CONF_NAME]} Fensterstatus"
+        self._attr_unique_id = f"{DOMAIN}_{config_entry.entry_id}_window_state"
+        self._attr_icon = "mdi:window-closed"
+        self._attr_native_value = "geschlossen"
+
+        # Device info for grouping
+        self._attr_device_info = DeviceInfo(
+            identifiers={(DOMAIN, config_entry.entry_id)},
+            name=f"SonTRV {config_entry.data[CONF_NAME]}",
+            manufacturer="k2dp2k",
+            model="Smart Thermostat Control",
+            sw_version="1.1.1",
+        )
+
+        self._attr_extra_state_attributes = {
+            "description": "Automatisch erkannter Fensterzustand basierend auf plötzlichen Temperaturstürzen.",
+            "window_open": False,
+            "window_freeze_since": None,
+        }
+
+    async def async_added_to_hass(self) -> None:
+        """Run when entity about to be added."""
+        await super().async_added_to_hass()
+
+        # If ID was not passed in init, try to find it (fallback)
+        if not self._climate_entity_id:
+            entity_reg = er.async_get(self.hass)
+            for entity in entity_reg.entities.values():
+                if (
+                    entity.config_entry_id == self._config_entry.entry_id
+                    and entity.domain == "climate"
+                ):
+                    self._climate_entity_id = entity.entity_id
+                    _LOGGER.info(
+                        "Window state sensor found climate entity: %s",
+                        self._climate_entity_id,
+                    )
+                    break
+
+        if not self._climate_entity_id:
+            _LOGGER.error(
+                "Window state sensor could not find climate entity for config_entry_id: %s",
+                self._config_entry.entry_id,
+            )
+            return
+
+        # Track climate entity state changes
+        self._remove_listener = async_track_state_change_event(
+            self.hass,
+            [self._climate_entity_id],
+            self._async_climate_changed,
+        )
+
+        # Initial update
+        await self._async_update_from_climate()
+
+    async def async_will_remove_from_hass(self) -> None:
+        """Run when entity will be removed."""
+        if self._remove_listener:
+            self._remove_listener()
+
+    @callback
+    async def _async_climate_changed(self, event) -> None:
+        """Handle climate entity state changes."""
+        await self._async_update_from_climate()
+        self.async_write_ha_state()
+
+    async def _async_update_from_climate(self) -> None:
+        """Update window state from climate entity attributes."""
+        if not self._climate_entity_id:
+            return
+
+        climate_state = self.hass.states.get(self._climate_entity_id)
+        if not climate_state:
+            return
+
+        attrs = climate_state.attributes or {}
+        window_open = bool(attrs.get("window_open", False))
+        window_since = attrs.get("window_freeze_since")
+
+        # Map to German strings as requested
+        self._attr_native_value = "offen" if window_open else "geschlossen"
+        self._attr_icon = "mdi:window-open" if window_open else "mdi:window-closed"
+
+        extra = dict(self._attr_extra_state_attributes or {})
+        extra["window_open"] = window_open
+        extra["window_freeze_since"] = window_since
+        self._attr_extra_state_attributes = extra
 
 
 class SonClouTRVRoomPIDSensor(SensorEntity):

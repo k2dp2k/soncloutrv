@@ -67,6 +67,12 @@ from .const import (
     CONF_ROOM_LOG_FILE,
     DEFAULT_ROOM_LOGGING_ENABLED,
     DEFAULT_ROOM_LOG_FILE,
+    CONF_WINDOW_DROP_THRESHOLD,
+    CONF_WINDOW_STABLE_BAND,
+    CONF_WINDOW_MAX_FREEZE,
+    DEFAULT_WINDOW_DROP_THRESHOLD,
+    DEFAULT_WINDOW_STABLE_BAND,
+    DEFAULT_WINDOW_MAX_FREEZE,
     CONF_OUTSIDE_TEMP_SENSOR,
     CONF_WEATHER_ENTITY,
     CONTROL_MODE_BINARY,
@@ -116,6 +122,13 @@ class RoomPIDState:
 
 
 SCAN_INTERVAL = timedelta(minutes=5)  # Fußbodenheizung ist träge, 5 Minuten reichen
+
+# Detection thresholds for sudden temperature drops (e.g. window open).
+# Instance-level values are configurable via options; these are only
+# module-level fallbacks and usually overridden in __init__/async_added.
+WINDOW_DROP_THRESHOLD = DEFAULT_WINDOW_DROP_THRESHOLD
+WINDOW_STABLE_BAND = DEFAULT_WINDOW_STABLE_BAND
+WINDOW_MAX_FREEZE = DEFAULT_WINDOW_MAX_FREEZE
 
 
 async def async_setup_entry(
@@ -286,6 +299,13 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
         self._prev_error = 0.0
         self._last_calc_time = None
         
+        # Window / sudden-drop detection state
+        self._window_freeze_active = False
+        self._window_freeze_start = None
+        self._window_drop_threshold = DEFAULT_WINDOW_DROP_THRESHOLD
+        self._window_stable_band = DEFAULT_WINDOW_STABLE_BAND
+        self._window_max_freeze = DEFAULT_WINDOW_MAX_FREEZE
+        
         # Debug values
         self._last_p = 0.0
         self._last_i = 0.0
@@ -362,6 +382,23 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
                 self._ki = self._get_config_value(CONF_KI, self._config, DEFAULT_KI)
                 self._kd = self._get_config_value(CONF_KD, self._config, DEFAULT_KD)
                 self._ka = self._get_config_value(CONF_KA, self._config, DEFAULT_KA)
+
+                # Window detection configuration
+                self._window_drop_threshold = self._get_config_value(
+                    CONF_WINDOW_DROP_THRESHOLD,
+                    self._config,
+                    DEFAULT_WINDOW_DROP_THRESHOLD,
+                )
+                self._window_stable_band = self._get_config_value(
+                    CONF_WINDOW_STABLE_BAND,
+                    self._config,
+                    DEFAULT_WINDOW_STABLE_BAND,
+                )
+                self._window_max_freeze = self._get_config_value(
+                    CONF_WINDOW_MAX_FREEZE,
+                    self._config,
+                    DEFAULT_WINDOW_MAX_FREEZE,
+                )
 
                 # Room logging configuration (may come from options)
                 self._room_logging_enabled = self._get_config_value(
@@ -560,22 +597,35 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
         # Update internal state
         await self._async_update_temp()
         
-        # Optimization: Noise Filter
+        # Optimization: Noise Filter + Window detection
         # Only trigger immediate control loop if temperature changed significantly (> 0.1°C)
         # Small fluctuations are handled in the next regular interval to save battery/motor.
         should_trigger_immediate = False
+        sudden_drop_detected = False
         
         if old_state and new_state and old_state.state not in (STATE_UNAVAILABLE, STATE_UNKNOWN) and new_state.state not in (STATE_UNAVAILABLE, STATE_UNKNOWN):
             try:
                 old_temp = float(old_state.state)
                 new_temp = float(new_state.state)
-                if abs(new_temp - old_temp) >= 0.1:
+                delta = new_temp - old_temp
+                if abs(delta) >= 0.1:
                     should_trigger_immediate = True
+                # Detect sudden negative jump -> assume window/door opened
+                if delta <= -self._window_drop_threshold:
+                    sudden_drop_detected = True
             except ValueError:
                 should_trigger_immediate = True # Fallback on error
         else:
             should_trigger_immediate = True # First update or unavailable state
             
+        if sudden_drop_detected:
+            self._window_freeze_active = True
+            self._window_freeze_start = dt_util.now()
+            _LOGGER.info(
+                "%s: Sudden temperature drop detected (possible window open) - freezing valve control",
+                self.name,
+            )
+        
         # Immediately sync temperature calibration when sensor changes (keep display updated)
         # Only if change is significant to reduce traffic
         if should_trigger_immediate:
@@ -733,6 +783,22 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
             await self._async_schedule_next_update()
             return
 
+        # If we previously detected a sudden temperature drop (window open),
+        # keep the current valve state until the temperature stabilizes again
+        # or a maximum freeze duration has passed.
+        if self._window_freeze_active:
+            if self._is_window_freeze_over():
+                _LOGGER.info("%s: Temperature stabilized after suspected window event - resuming PID control", self.name)
+                self._window_freeze_active = False
+            else:
+                _LOGGER.debug(
+                    "%s: Window event active, keeping valve at %d%%",
+                    self.name,
+                    self._last_set_valve_opening,
+                )
+                await self._async_schedule_next_update()
+                return
+
         # Always update temperature sync (external sensor)
         await self._async_sync_temperature_calibration()
         
@@ -783,6 +849,29 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
         
         # Schedule next run
         await self._async_schedule_next_update()
+    
+    def _is_window_freeze_over(self) -> bool:
+        """Return True if the window/sudden-drop freeze should end.
+
+        We consider the situation "stable" again if:
+        - The freeze has been active longer than WINDOW_MAX_FREEZE seconds, or
+        - The last few temperature readings are within WINDOW_STABLE_BAND.
+        """
+        if not self._window_freeze_active:
+            return True
+
+        now = dt_util.now()
+        if self._window_freeze_start is not None:
+            if (now - self._window_freeze_start).total_seconds() > self._window_max_freeze:
+                return True
+
+        # Check recent temperature history for stability
+        if len(self._temp_history) >= 3:
+            recent = self._temp_history[-3:]
+            if max(recent) - min(recent) <= self._window_stable_band:
+                return True
+
+        return False
     
     async def _async_sync_temperature_calibration(self) -> None:
         """Sync external temperature sensor with TRV via external temperature input."""
@@ -1391,6 +1480,16 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
             # Temperature trend: positive = warming, negative = cooling
             trend = self._temp_history[-1] - self._temp_history[0]
             attrs[ATTR_TEMP_TREND] = round(trend, 2)
+
+        # Window / sudden drop info
+        attrs["window_open"] = self._window_freeze_active
+        if self._window_freeze_start is not None:
+            attrs["window_freeze_since"] = self._window_freeze_start.isoformat()
+        else:
+            attrs["window_freeze_since"] = None
+        attrs["window_drop_threshold"] = self._window_drop_threshold
+        attrs["window_stable_band"] = self._window_stable_band
+        attrs["window_max_freeze"] = self._window_max_freeze
         
         self._attr_extra_state_attributes = attrs
         _LOGGER.debug("%s: Updated extra_state_attributes = %s", self.name, attrs)
