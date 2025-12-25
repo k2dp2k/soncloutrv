@@ -386,6 +386,24 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
                 self._kd = self._get_config_value(CONF_KD, self._config, DEFAULT_KD)
                 self._ka = self._get_config_value(CONF_KA, self._config, DEFAULT_KA)
 
+                # Migration: Wenn noch die alten, sehr aggressiven Standardwerte
+                # (Kp=20, Ki=0.01, Kd=500, Ka=0) aktiv sind, stelle einmalig
+                # auf die neuen, einfacheren P-Standardwerte um.
+                if (
+                    self._kp == 20.0
+                    and self._ki == 0.01
+                    and self._kd == 500.0
+                    and self._ka == 0.0
+                ):
+                    self._kp = 3.0
+                    self._ki = 0.0
+                    self._kd = 0.0
+                    self._ka = 0.0
+                    _LOGGER.info(
+                        "%s: Migrated legacy PID gains to P-only defaults (Kp=3.0, Ki=0, Kd=0, Ka=0)",
+                        self.name,
+                    )
+
                 # Window detection configuration
                 self._window_drop_threshold = self._get_config_value(
                     CONF_WINDOW_DROP_THRESHOLD,
@@ -645,6 +663,14 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
                 "%s: Sudden temperature drop detected (possible window open) - freezing valve control",
                 self.name,
             )
+
+            # Sofort Ventil schließen, damit während des vermuteten
+            # Fenster-Events definitiv nicht weiter geheizt wird.
+            if self._last_set_valve_opening != 0:
+                await self._async_set_valve_opening(0)
+            self._active = False
+            self._update_extra_attributes()
+            self.async_write_ha_state()
         
         # Immediately sync temperature calibration when sensor changes (keep display updated)
         # Only if change is significant to reduce traffic
@@ -1056,14 +1082,8 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
             state.last_calc_time = now
             
         # 1. Proportional Term
-        # Optimization: Gain Scheduling (Boost)
-        # If error is large (> 1.0°C), increase Kp dynamically to overcome inertia faster.
+        # Vereinfachte Regelung: fester Kp, keine dynamische Verstärkung.
         effective_kp = self._kp
-        if error > 1.5:
-            effective_kp *= 2.5  # Heavy Boost for cold start
-        elif error > 0.8:
-            effective_kp *= 1.5  # Mild Boost for gap closing
-            
         p_term = effective_kp * error
         
         # 2. Integral Term (Learning)
