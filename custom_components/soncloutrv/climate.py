@@ -1192,6 +1192,15 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
         # Usually: PID output 0-100% corresponds to valve 0-Max
         final_desired = int((desired_percent / 100.0) * self._max_valve_position)
 
+        # Anwenden der Hysterese um den Sollwert:
+        # - Wenn der Raum deutlich zu warm ist (error < -hysteresis), Ventil sicher schließen.
+        # - Wenn der Raum deutlich zu kalt ist (error > hysteresis), mindestens minimal öffnen,
+        #   auch wenn der P-Regler wegen Rundung sonst 0 liefern würde.
+        if error < -self._hysteresis:
+            final_desired = 0
+        elif error > self._hysteresis and final_desired == 0 and self._max_valve_position > 0:
+            final_desired = 1  # minimale Öffnungseinheit
+
         # Optional: append a CSV log row for this room for later ML analysis.
         # We only log when heating is enabled so the dataset reflects periods
         # where the TRVs actually work against the building inertia.
