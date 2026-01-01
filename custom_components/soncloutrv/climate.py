@@ -1082,8 +1082,28 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
             state.last_calc_time = now
             
         # 1. Proportional Term
-        # Vereinfachte Regelung: fester Kp, keine dynamische Verstärkung.
-        effective_kp = self._kp
+        # Fehlerabhängige Verstärkung: in der Nähe des Sollwerts bleibt Kp wie konfiguriert,
+        # bei größeren Abweichungen nach unten (Raum zu kalt) wird Kp schrittweise erhöht,
+        # damit der Regler kräftiger heizt. Nach oben (Raum zu warm) bleiben wir konservativ,
+        # um Überschwingen zu vermeiden.
+        abs_error = abs(error)
+        gain_scale = 1.0
+        if abs_error > 1.8:
+            gain_scale = 2.0
+        elif abs_error > 1.2:
+            gain_scale = 1.7
+        elif abs_error > 0.7:
+            gain_scale = 1.4
+        elif abs_error > 0.3:
+            gain_scale = 1.2
+
+        effective_kp = self._kp * gain_scale
+
+        # Wenn der Raum schon zu warm ist (error < 0), leicht reduzierte Verstärkung,
+        # damit wir nicht unnötig aggressiv nach unten regeln.
+        if error < 0:
+            effective_kp *= 0.8
+
         p_term = effective_kp * error
         
         # 2. Integral Term (Learning)
