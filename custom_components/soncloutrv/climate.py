@@ -164,6 +164,7 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
     _attr_should_poll = False
     _attr_precision = PRECISION_TENTHS
     _attr_temperature_unit = UnitOfTemperature.CELSIUS
+    _attr_target_temperature_step = 0.2
     _attr_supported_features = (
         ClimateEntityFeature.TARGET_TEMPERATURE | 
         ClimateEntityFeature.TURN_OFF | 
@@ -402,6 +403,21 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
                     _LOGGER.info(
                         "%s: Migrated legacy PID gains to P-only defaults (Kp=3.0, Ki=0, Kd=0, Ka=0)",
                         self.name,
+                    )
+                # Neue Migration: Wenn der Regler bereits auf den einfachen P-Defaults
+                # (Kp=3, Ki=0, Kd=0, Ka=0) steht, aktiviere einen kleinen I-Anteil
+                # für höhere Genauigkeit, ohne bestehende manuelle Tunings zu überschreiben.
+                elif (
+                    self._kp == 3.0
+                    and self._ki == 0.0
+                    and self._kd == 0.0
+                    and self._ka == 0.0
+                ):
+                    self._ki = DEFAULT_KI
+                    _LOGGER.info(
+                        "%s: Enabled small integral gain Ki=%.4f for more precise control",
+                        self.name,
+                        self._ki,
                     )
 
                 # Window detection configuration
@@ -1111,27 +1127,22 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
         # (Prevent windup if sensor was offline for a long time). Additionally,
         # only learn when heating is actually enabled (HVACMode.HEAT).
         i_term = 0.0
-        if dt > 0 and dt < 3600 and heating_on: # Ignore if gap > 1 hour or heating off
-            # Accumulate error
-            # Conditional Integration: Stop integrating if output is saturated?
-            # For simplicity: continuous integration with clamping
-            
-            # Deadband for Integral: Don't change integral if error is very small to avoid oscillation
-            if abs(error) >= self._hysteresis:
+        if dt > 0 and dt < 3600 and heating_on and self._ki > 0:  # Ignore if gap > 1 hour, heating off oder Ki=0
+            abs_err = abs(error)
+            # Bereich für I-Anteil:
+            # - |error| < hysteresis: Integral langsam abbauen (kein Nachziehen mehr nötig)
+            # - hysteresis <= |error| <= 1.0 K: normal integrieren (Feinkorrektur)
+            # - |error| > 1.0 K: Aufheizphase, hier übernimmt hauptsächlich P, kein weiteres Aufbauen
+            if abs_err < self._hysteresis:
+                # Langsames Zurückfahren des Integrals in Richtung 0
+                state.integral_error *= 0.9
+            elif abs_err <= 1.0:
                 state.integral_error += error * dt
-            
-            # Anti-Windup: Clamp integral error to represent max +/- 100% contribution
-            # If Ki is 0.01, and we want max 100%, max_integral = 100/0.01 = 10000
-            if self._ki > 0:
-                max_integral = 100.0 / self._ki
-                state.integral_error = max(-max_integral, min(max_integral, state.integral_error))
-            
-            # Optimization: Conditional Integration
-            # If output is saturated (at 0% or 100%) AND error is driving it further into saturation,
-            # stop integrating.
-            # We calculate P+D first to see if we are saturated? 
-            # Simplified: If we are already at max integral and error has same sign, don't add.
-            
+
+            # Anti-Windup: max. +/-100% Beitrag durch I-Anteil
+            max_integral = 100.0 / self._ki
+            state.integral_error = max(-max_integral, min(max_integral, state.integral_error))
+
             i_term = self._ki * state.integral_error
         else:
             # First run or restart, just use existing integral
@@ -1172,6 +1183,10 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
                      _LOGGER.debug("%s: D-Term spike detected (%.1f), suppressing", self.name, d_term)
                      d_term = 0.0
 
+        # Wenn der Fehler das Vorzeichen wechselt (z.B. von zu kalt nach zu warm),
+        # Integral zurücksetzen, damit kein Nachschwingen durch aufgelaufenen I-Anteil entsteht.
+        if error * state.prev_error < 0:
+            state.integral_error = 0.0
         state.prev_error = error
         
         # 4. Feed-Forward Term (Weather Compensation)

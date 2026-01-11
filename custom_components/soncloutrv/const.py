@@ -85,9 +85,9 @@ DEFAULT_CONTROL_MODE = CONTROL_MODE_PID  # PID für Fußbodenheizung
 # Vereinfachte Standardregelung: zunächst reiner P-Regler
 # (angepasste Default-Werte, alte Konfigurationen werden in climate.py migriert)
 DEFAULT_KP = 3.0
-DEFAULT_KI = 0.0  # Integral-Gain (Lernfaktor) – default aus
-DEFAULT_KD = 0.0  # Derivative-Gain – default aus
-DEFAULT_KA = 0.0  # Feed-Forward Gain (Standard aus, da optional)
+DEFAULT_KI = 0.001  # Kleiner Integral-Gain (Lernfaktor) für genauere Regelung
+DEFAULT_KD = 0.0    # Derivative-Gain – default aus
+DEFAULT_KA = 0.0    # Feed-Forward Gain (Standard aus, da optional)
 # Room logging defaults (for external analysis / ML tuning)
 DEFAULT_ROOM_LOGGING_ENABLED = False
 DEFAULT_ROOM_LOG_FILE = "sontrv_room_log.csv"
