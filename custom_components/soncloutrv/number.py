@@ -43,8 +43,8 @@ async def async_setup_entry(
             0.1,
             "°C",
             "mdi:thermometer-lines",
-            0.2,  # Default value (entspricht DEFAULT_HYSTERESIS)
-            "Temperaturbereich, in dem das Ventil nicht verändert wird. Verhindert ständiges Schalten. Empfehlung: 0,2-0,5°C.",
+            0.15,  # Default value (entspricht DEFAULT_HYSTERESIS)
+            "Temperaturbereich, in dem das Ventil nicht verändert wird. Verhindert ständiges Schalten. Empfehlung: 0,15-0,5°C.",
         ),
         SonClouTRVNumber(
             hass,
