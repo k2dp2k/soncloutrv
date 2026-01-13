@@ -420,45 +420,6 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
                         self._ki,
                     )
 
-                # Zusätzliche Migration: Wenn eine Climate-Entity noch exakt mit alten
-                # Standardwerten läuft (z.B. nach einem früheren Update), hebe die
-                # PID-Gains auf die aktuellen Defaults an, damit **bestehende**
-                # Thermostate nicht hinter den neuen Tunings zurückbleiben.
-                #
-                # Wir erkennen "ungetunte" Installationen daran, dass sie eine der
-                # bekannten Default-Kombinationen verwenden:
-                # - Kp=3.0 / Ki in {0.0, 0.001}
-                # - Kp=4.0 / Ki=0.002
-                # und Kd/Ka beide 0.0.
-                elif (
-                    self._kd == 0.0
-                    and self._ka == 0.0
-                    and (
-                        (self._kp == 3.0 and self._ki in (0.0, 0.001))
-                        or (self._kp == 4.0 and self._ki == 0.002)
-                    )
-                ):
-                    old_kp, old_ki = self._kp, self._ki
-                    self._kp = DEFAULT_KP
-                    self._ki = DEFAULT_KI
-
-                    # Persistiere in config_entry.options, damit die Werte auch nach
-                    # einem Neustart erhalten bleiben.
-                    new_options = {
-                        **entry.options,
-                        CONF_KP: self._kp,
-                        CONF_KI: self._ki,
-                    }
-                    self.hass.config_entries.async_update_entry(entry, options=new_options)
-                    _LOGGER.info(
-                        "%s: Migrated PID gains from Kp=%.1f/Ki=%.3f to new defaults Kp=%.1f/Ki=%.3f",
-                        self.name,
-                        old_kp,
-                        old_ki,
-                        self._kp,
-                        self._ki,
-                    )
-
                 # Window detection configuration
                 self._window_drop_threshold = self._get_config_value(
                     CONF_WINDOW_DROP_THRESHOLD,
