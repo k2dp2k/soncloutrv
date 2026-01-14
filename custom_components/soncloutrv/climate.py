@@ -1309,6 +1309,15 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
             "outside_sensor",
             "hvac_mode",
             "hvac_action",
+            "kp",
+            "ki",
+            "kd",
+            "ka",
+            "pid_p",
+            "pid_i",
+            "pid_d",
+            "pid_ff",
+            "pid_integral_error",
         ]
 
         row = [
@@ -1325,6 +1334,15 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
             self._outside_temp_sensor,
             getattr(self, "_attr_hvac_mode", None),
             getattr(self, "_attr_hvac_action", None),
+            self._kp,
+            self._ki,
+            self._kd,
+            self._ka,
+            self._last_p,
+            self._last_i,
+            self._last_d,
+            self._last_ff,
+            self._integral_error,
         ]
 
         try:
