@@ -193,7 +193,8 @@ async def async_setup_entry(
     # === ROOM-LEVEL PID DEBUG SENSOR ===
     # Determine room key in the same way as the climate entity does so that the
     # sensor can read the shared RoomPIDState from hass.data[DOMAIN]["room_states"].
-    room_id = config_entry.data.get(CONF_ROOM_ID)
+    # Prefer updated room_id from options if available.
+    room_id = config_entry.options.get(CONF_ROOM_ID, config_entry.data.get(CONF_ROOM_ID))
     temp_sensor = config_entry.data.get(CONF_TEMP_SENSOR)
     room_key = room_id or temp_sensor
 

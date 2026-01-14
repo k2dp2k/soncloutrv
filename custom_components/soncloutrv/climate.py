@@ -359,17 +359,6 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
         """Run when entity about to be added."""
         await super().async_added_to_hass()
 
-        # Register in room registry (grouped by external temp sensor).
-        # This does not change behaviour yet, it only tracks which
-        # SonTRV climates share the same room.
-        rooms = self.hass.data.setdefault(DOMAIN, {}).setdefault("rooms", {})
-        room_entities = rooms.setdefault(self._room_key, [])
-        if self not in room_entities:
-            room_entities.append(self)
-        # First entity in list is the temporary "leader" which can be
-        # used later for coordinated room-level PID control.
-        self._is_room_leader = room_entities[0] is self
-        
         # Get reference to config_entry from registry
         for entry in self.hass.config_entries.async_entries(DOMAIN):
             if entry.entry_id == self._entry_id:
@@ -458,6 +447,26 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
                 _LOGGER.debug("%s: Loaded config values - hysteresis=%.1f, Kp=%.1f, Ki=%.3f, Kd=%.1f, Ka=%.1f", 
                             self.name, self._hysteresis, self._kp, self._ki, self._kd, self._ka)
                 break
+        
+        # Update room_id/room_key from options (room can be reassigned via options flow)
+        # If no explicit room_id is configured, fall back to the external temp sensor.
+        try:
+            new_room_id = self._get_config_value(CONF_ROOM_ID, self._config, None)
+        except Exception:
+            new_room_id = None
+        self._room_id = new_room_id or self._room_id
+        self._room_key = self._room_id or self._temp_sensor
+
+        # Register in room registry (grouped by external temp sensor or room_id).
+        # This tracks which SonTRV climates share the same room and allows
+        # shared PID state across multiple TRVs.
+        rooms = self.hass.data.setdefault(DOMAIN, {}).setdefault("rooms", {})
+        room_entities = rooms.setdefault(self._room_key, [])
+        if self not in room_entities:
+            room_entities.append(self)
+        # First entity in list is the temporary "leader" which can be
+        # used later for coordinated room-level PID control.
+        self._is_room_leader = room_entities[0] is self
         
         # Auto-discover weather entity if not configured
         if not self._outside_temp_sensor:
