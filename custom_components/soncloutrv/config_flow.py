@@ -275,7 +275,10 @@ class SonClouTRVOptionsFlow(config_entries.OptionsFlow):
                 ): vol.All(vol.Coerce(float), vol.Range(min=5, max=35)),
                 vol.Optional(
                     CONF_ROOM_ID,
-                    default=self.config_entry.data.get(CONF_ROOM_ID, DEFAULT_ROOMS[0]),
+                    default=self.config_entry.options.get(
+                        CONF_ROOM_ID,
+                        self.config_entry.data.get(CONF_ROOM_ID, DEFAULT_ROOMS[0]),
+                    ),
                 ): selector.SelectSelector(
                     selector.SelectSelectorConfig(
                         options=DEFAULT_ROOMS,
