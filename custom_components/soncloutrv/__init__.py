@@ -31,6 +31,27 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up SonClouTRV from a config entry."""
     hass.data.setdefault(DOMAIN, {})
 
+    # Ensure all thermostats start from the current PID defaults at least once.
+    # Wir setzen Kp/Ki/Kd/Ka nur dann zurück, wenn dies für diesen Eintrag noch
+    # nicht passiert ist (Marker in den Optionen). So bleiben spätere manuelle
+    # Tunings erhalten.
+    opts = dict(entry.options or {})
+    if not opts.get("pid_defaults_v3_applied"):
+        opts[CONF_KP] = DEFAULT_KP
+        opts[CONF_KI] = DEFAULT_KI
+        opts[CONF_KD] = DEFAULT_KD
+        opts[CONF_KA] = DEFAULT_KA
+        opts["pid_defaults_v3_applied"] = True
+        hass.config_entries.async_update_entry(entry, options=opts)
+        _LOGGER.info(
+            "Applied PID defaults Kp=%.1f, Ki=%.3f, Kd=%.1f, Ka=%.1f for entry %s during setup",
+            DEFAULT_KP,
+            DEFAULT_KI,
+            DEFAULT_KD,
+            DEFAULT_KA,
+            entry.entry_id,
+        )
+
     # Per-config-entry storage (existing behaviour)
     hass.data[DOMAIN][entry.entry_id] = {
         "config": entry.data,
