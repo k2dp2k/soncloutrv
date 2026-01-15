@@ -119,6 +119,11 @@ class RoomPIDState:
         # Last computed PID output in percent (0-100) representing the
         # *room-level* heating demand. This is used for room debug sensors.
         self.last_output: float = 0.0
+        # Exponentially smoothed average absolute error for adaptive Ki scaling
+        # (room-level). This allows slow "learning" of how far der Raum typischer-
+        # weise vom Soll abweicht und verstärkt den I-Anteil automatisch, wenn der
+        # Raum dauerhaft zu kalt/zu warm bleibt.
+        self.avg_error: float = 0.0
 
 
 SCAN_INTERVAL = timedelta(minutes=5)  # Fußbodenheizung ist träge, 5 Minuten reichen
@@ -1105,6 +1110,18 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
         else:
             dt = (now - state.last_calc_time).total_seconds()
             state.last_calc_time = now
+
+        # Update long-term average absolute error for adaptive Ki scaling.
+        # Wir verwenden einen exponentiell geglätteten Mittelwert mit einer
+        # Zeitkonstanten von grob 1-2 Stunden (abhängig vom tatsächlichen
+        # Aufrufintervall), so dass langsame Dauerabweichungen erkannt werden.
+        if dt > 0 and dt < 7200:
+            abs_err_for_avg = abs(error)
+            if state.avg_error == 0.0:
+                state.avg_error = abs_err_for_avg
+            else:
+                alpha = min(0.1, dt / 7200.0)  # ca. 2h Zeitkonstante bei 10-Minuten-Intervall
+                state.avg_error = (1 - alpha) * state.avg_error + alpha * abs_err_for_avg
             
         # 1. Proportional Term
         # Fehlerabhängige Verstärkung: in der Nähe des Sollwerts bleibt Kp wie konfiguriert,
@@ -1135,8 +1152,25 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
         # Only integrate if we have a valid time delta and error is within reasonable bounds
         # (Prevent windup if sensor was offline for a long time). Additionally,
         # only learn when heating is actually enabled (HVACMode.HEAT).
+        #
+        # Neu: adaptives Ki. Wenn der Raum über längere Zeit eine deutliche
+        # Abweichung vom Soll hat (state.avg_error hoch), wird der I-Anteil
+        # automatisch verstärkt. Damit "lernt" der Regler pro Raum ohne, dass
+        # Kp/Ki manuell nachgestellt werden müssen.
+        base_ki = self._ki
+        effective_ki = base_ki
+        if heating_on and base_ki > 0:
+            avg_err = getattr(state, "avg_error", 0.0)
+            if avg_err > self._hysteresis:
+                # Skala: ab Hysterese aufwärts. Pro weitere 0.3 K Dauerfehler
+                # erhöhen wir Ki um ca. 1x, bis max. 4x.
+                scale = 1.0 + max(0.0, (avg_err - self._hysteresis) / 0.3)
+                if scale > 4.0:
+                    scale = 4.0
+                effective_ki = base_ki * scale
+
         i_term = 0.0
-        if dt > 0 and dt < 3600 and heating_on and self._ki > 0:  # Ignore if gap > 1 hour, heating off oder Ki=0
+        if dt > 0 and dt < 3600 and heating_on and effective_ki > 0:  # Ignore if gap > 1 hour, heating off oder Ki=0
             abs_err = abs(error)
             # Bereich für I-Anteil:
             # - |error| < hysteresis: Integral langsam abbauen (kein Nachziehen mehr nötig)
@@ -1149,13 +1183,13 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
                 state.integral_error += error * dt
 
             # Anti-Windup: max. +/-100% Beitrag durch I-Anteil
-            max_integral = 100.0 / self._ki
+            max_integral = 100.0 / effective_ki
             state.integral_error = max(-max_integral, min(max_integral, state.integral_error))
 
-            i_term = self._ki * state.integral_error
+            i_term = effective_ki * state.integral_error
         else:
             # First run or restart, just use existing integral
-            i_term = self._ki * state.integral_error
+            i_term = effective_ki * state.integral_error
             
         # 3. Derivative Term (Damping)
         # Optimization: Calculate derivative based on input (Temperature) instead of Error

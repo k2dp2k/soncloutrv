@@ -53,39 +53,44 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 
 async def async_migrate_entry(hass: HomeAssistant, config_entry: ConfigEntry) -> bool:
-    """Migrate old entry.
+    """Migrate config entry to the latest schema.
 
-    Ab Version 2 werden **alle** bestehenden Thermostate einmalig auf die
+    Ab Version 3 werden **alle** bestehenden Thermostate erneut auf die jeweils
     aktuellen PID-Standardwerte (DEFAULT_KP/KI/KD/KA) zurückgesetzt. Dadurch
-    starten sie nach dem Update mit denselben Basiswerten wie neue Installationen
-    und können sich dann wieder adaptiv einregeln.
+    starten auch bereits konfigurierte Räume nach einem Update mit denselben
+    Startwerten wie neue Installationen und können sich dann über den
+    adaptiven I-Anteil wieder einregeln.
     """
-    _LOGGER.debug("Migrating config entry %s from version %s", config_entry.entry_id, config_entry.version)
+    _LOGGER.debug(
+        "Migrating config entry %s from version %s",
+        config_entry.entry_id,
+        config_entry.version,
+    )
 
-    version = config_entry.version
-
-    if version < 2:
+    if config_entry.version < 3:
         new_options = {**config_entry.options}
         new_options[CONF_KP] = DEFAULT_KP
         new_options[CONF_KI] = DEFAULT_KI
         new_options[CONF_KD] = DEFAULT_KD
         new_options[CONF_KA] = DEFAULT_KA
 
-        # Setze die Entry-Version hoch, damit diese Rücksetzung nur einmalig
-        # beim Update passiert und spätere manuelle Tunings erhalten bleiben.
-        config_entry.version = 2
+        # Setze die Entry-Version auf 3, damit diese Rücksetzung nur einmalig
+        # beim Update passiert. Danach übernimmt die Laufzeit-Logik (adaptives Ki)
+        # das Feintuning pro Raum.
+        config_entry.version = 3
         hass.config_entries.async_update_entry(
             config_entry,
             options=new_options,
         )
 
         _LOGGER.info(
-            "Updated SonClouTRV PID options to defaults Kp=%.1f, Ki=%.3f, Kd=%.1f, Ka=%.1f for entry %s",
+            "Reset SonClouTRV PID options to defaults Kp=%.1f, Ki=%.3f, Kd=%.1f, Ka=%.1f for entry %s (version %s)",
             DEFAULT_KP,
             DEFAULT_KI,
             DEFAULT_KD,
             DEFAULT_KA,
             config_entry.entry_id,
+            config_entry.version,
         )
 
     _LOGGER.info("Migration to version %s successful", config_entry.version)

@@ -82,10 +82,12 @@ DEFAULT_MIN_CYCLE_DURATION = 300  # 5 minutes in seconds
 DEFAULT_MAX_VALVE_POSITION = 40  # Prozent (Stufe 2)
 DEFAULT_VALVE_OPENING_STEP = "2"  # Stufe 2 = 40%
 DEFAULT_CONTROL_MODE = CONTROL_MODE_PID  # PID für Fußbodenheizung
-# Vereinfachte Standardregelung: zunächst reiner P-Regler
-# (angepasste Default-Werte, alte Konfigurationen werden in climate.py migriert)
-DEFAULT_KP = 5.0
-DEFAULT_KI = 0.004  # Deutlich stärkerer Integral-Gain für schnelleren Abbau von Dauerabweichungen
+# Vereinfachte Standardregelung: P+I-Regler mit adaptivem I-Anteil.
+# Diese Werte sind Startpunkte; der effektive Ki wird zur Laufzeit pro Raum
+# automatisch skaliert (siehe climate.py), abhängig von der gemittelten
+# Temperaturabweichung.
+DEFAULT_KP = 10.0
+DEFAULT_KI = 0.005  # Basis-Integral-Gain, wird adaptiv verstärkt/abgeschwächt
 DEFAULT_KD = 0.0    # Derivative-Gain – default aus
 DEFAULT_KA = 0.0    # Feed-Forward Gain (Standard aus, da optional)
 # Room logging defaults (for external analysis / ML tuning)
