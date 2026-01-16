@@ -57,28 +57,32 @@ from .const import (
     CONF_KI,
     CONF_KD,
     CONF_KA,
-    DEFAULT_HYSTERESIS,
-    DEFAULT_CONTROL_MODE,
-    DEFAULT_KP,
-    DEFAULT_KI,
-    DEFAULT_KD,
-    DEFAULT_KA,
     CONF_ROOM_LOGGING_ENABLED,
     CONF_ROOM_LOG_FILE,
-    DEFAULT_ROOM_LOGGING_ENABLED,
-    DEFAULT_ROOM_LOG_FILE,
     CONF_WINDOW_DROP_THRESHOLD,
     CONF_WINDOW_STABLE_BAND,
     CONF_WINDOW_MAX_FREEZE,
-    DEFAULT_WINDOW_DROP_THRESHOLD,
-    DEFAULT_WINDOW_STABLE_BAND,
-    DEFAULT_WINDOW_MAX_FREEZE,
+    CONF_WINDOW_SENSORS,
+    CONF_WINDOW_SENSOR_SCOPE,
+    WINDOW_SCOPE_LOCAL,
+    WINDOW_SCOPE_ALL,
     CONF_OUTSIDE_TEMP_SENSOR,
     CONF_WEATHER_ENTITY,
     CONTROL_MODE_BINARY,
     CONTROL_MODE_PROPORTIONAL,
     CONTROL_MODE_PID,
     VALVE_OPENING_STEPS,
+    DEFAULT_HYSTERESIS,
+    DEFAULT_CONTROL_MODE,
+    DEFAULT_KP,
+    DEFAULT_KI,
+    DEFAULT_KD,
+    DEFAULT_KA,
+    DEFAULT_ROOM_LOGGING_ENABLED,
+    DEFAULT_ROOM_LOG_FILE,
+    DEFAULT_WINDOW_DROP_THRESHOLD,
+    DEFAULT_WINDOW_STABLE_BAND,
+    DEFAULT_WINDOW_MAX_FREEZE,
     ATTR_VALVE_POSITION,
     ATTR_CONTROL_MODE,
     ATTR_TIME_CONTROL,
@@ -314,9 +318,20 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
         self._window_start_temp = None
         # Bisher niedrigste Temperatur während des Freeze (Talpunkt)
         self._window_min_temp = None
+        # Konfigurierbare Schwellwerte (werden in async_added_to_hass ggf. aus
+        # den Options überschrieben)
         self._window_drop_threshold = DEFAULT_WINDOW_DROP_THRESHOLD
         self._window_stable_band = DEFAULT_WINDOW_STABLE_BAND
         self._window_max_freeze = DEFAULT_WINDOW_MAX_FREEZE
+        # Optional konfigurierte Fenster-/Türsensoren und deren Geltungsbereich
+        raw_sensors = config.get(CONF_WINDOW_SENSORS, [])
+        if isinstance(raw_sensors, list):
+            self._window_sensors = raw_sensors
+        elif raw_sensors:
+            self._window_sensors = [raw_sensors]
+        else:
+            self._window_sensors = []
+        self._window_sensor_scope = config.get(CONF_WINDOW_SENSOR_SCOPE, WINDOW_SCOPE_LOCAL)
         
         # Debug values
         self._last_p = 0.0
@@ -434,6 +449,18 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
                     self._config,
                     DEFAULT_WINDOW_MAX_FREEZE,
                 )
+                # Optional Fenster-/Türsensoren (Liste von binary_sensor-Entitäten)
+                self._window_sensors = self._get_config_value(
+                    CONF_WINDOW_SENSORS,
+                    self._config,
+                    [],
+                ) or []
+                # Scope: nur dieses Thermostat oder alle SonTRV-Thermostate
+                self._window_sensor_scope = self._get_config_value(
+                    CONF_WINDOW_SENSOR_SCOPE,
+                    self._config,
+                    WINDOW_SCOPE_LOCAL,
+                )
 
                 # Room logging configuration (may come from options)
                 self._room_logging_enabled = self._get_config_value(
@@ -539,6 +566,16 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
                 self._async_valve_changed,
             )
         )
+
+        # Track window/door sensors if configured
+        if self._window_sensors:
+            self._remove_listeners.append(
+                async_track_state_change_event(
+                    self.hass,
+                    self._window_sensors,
+                    self._async_window_sensor_changed,
+                )
+            )
         
         # Start Adaptive Polling Loop
         await self._async_schedule_next_update()
@@ -666,25 +703,30 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
                 if abs(delta) >= 0.1:
                     should_trigger_immediate = True
                 
-                # 1) Single-step Erkennung: sehr plötzlicher Sprung
-                if delta <= -self._window_drop_threshold:
-                    sudden_drop_detected = True
-                
-                # 2) Zeitfenster-Erkennung: Wenn die Temperatur innerhalb der
-                #    letzten WINDOW_DROP_WINDOW Sekunden deutlich gefallen ist
-                #    (bezogen auf das Maximum in diesem Fenster), werten wir
-                #    das ebenfalls als Fenster-/Tür-Öffnung.
-                if self._temp_history and self._temp_time_history:
-                    now = dt_util.now()
-                    window_start = now - timedelta(seconds=WINDOW_DROP_WINDOW)
-                    recent_values: list[float] = []
-                    for value, ts in zip(self._temp_history, self._temp_time_history):
-                        if ts >= window_start:
-                            recent_values.append(value)
-                    if recent_values:
-                        recent_max = max(recent_values)
-                        if recent_max - new_temp >= self._window_drop_threshold:
-                            sudden_drop_detected = True
+                # Temperaturbasierte Fenstererkennung nur verwenden, wenn KEINE
+                # expliziten Fenster-/Türsensoren für dieses Thermostat
+                # konfiguriert sind. Andernfalls übernimmt die Sensorsignalisierung
+                # die Steuerung von window_freeze_active.
+                if not self._window_sensors:
+                    # 1) Single-step Erkennung: sehr plötzlicher Sprung
+                    if delta <= -self._window_drop_threshold:
+                        sudden_drop_detected = True
+                    
+                    # 2) Zeitfenster-Erkennung: Wenn die Temperatur innerhalb der
+                    #    letzten WINDOW_DROP_WINDOW Sekunden deutlich gefallen ist
+                    #    (bezogen auf das Maximum in diesem Fenster), werten wir
+                    #    das ebenfalls als Fenster-/Tür-Öffnung.
+                    if self._temp_history and self._temp_time_history:
+                        now = dt_util.now()
+                        window_start = now - timedelta(seconds=WINDOW_DROP_WINDOW)
+                        recent_values: list[float] = []
+                        for value, ts in zip(self._temp_history, self._temp_time_history):
+                            if ts >= window_start:
+                                recent_values.append(value)
+                        if recent_values:
+                            recent_max = max(recent_values)
+                            if recent_max - new_temp >= self._window_drop_threshold:
+                                sudden_drop_detected = True
             except ValueError:
                 should_trigger_immediate = True # Fallback on error
         else:
@@ -960,11 +1002,25 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
         """Return True if the window/sudden-drop freeze should end.
 
         We consider the situation "stable" again if:
-        - The freeze has been active longer than WINDOW_MAX_FREEZE seconds, or
-        - The last few temperature readings are within WINDOW_STABLE_BAND.
+        - For purely temperaturbasierte Erkennung:
+          - The freeze has been active longer than WINDOW_MAX_FREEZE seconds, or
+          - The last few temperature readings are within WINDOW_STABLE_BAND.
+        - Wenn explizite Fenster-/Türsensoren konfiguriert sind und einer davon
+          noch "offen" meldet, endet der Freeze *nicht*, egal wie lange er
+          bereits aktiv ist.
         """
         if not self._window_freeze_active:
             return True
+
+        # Wenn Fenster-/Türsensoren für dieses Thermostat konfiguriert sind und
+        # noch mindestens einer "offen" (state == "on") meldet, bleibt der
+        # Freeze aktiv, unabhängig von Dauer oder Temperaturverlauf.
+        if self._window_sensors:
+            for entity_id in self._window_sensors:
+                state = self.hass.states.get(entity_id)
+                if state and state.state not in (STATE_UNAVAILABLE, STATE_UNKNOWN):
+                    if str(state.state).lower() == "on":
+                        return False
 
         now = dt_util.now()
         # 1) Harte Obergrenze für die Freeze-Dauer (Failsafe)
@@ -999,6 +1055,84 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
 
         return False
     
+    @callback
+    async def _async_window_sensor_changed(self, event) -> None:
+        """Handle window/door binary sensor changes.
+
+        Any configured sensor in state "on" is treated as "window open".
+        Depending on the configured scope this affects nur dieses Thermostat
+        oder alle SonTRV-Thermostate.
+        """
+        # Determine aggregated "is any window open?" state from all configured sensors
+        is_open = False
+        if self._window_sensors:
+            for entity_id in self._window_sensors:
+                state = self.hass.states.get(entity_id)
+                if state and state.state not in (STATE_UNAVAILABLE, STATE_UNKNOWN):
+                    if str(state.state).lower() == "on":
+                        is_open = True
+                        break
+
+        # Apply according to scope
+        if self._window_sensor_scope == WINDOW_SCOPE_ALL:
+            # Global scope: alle SonTRV-Klimas aus hass.data[DOMAIN] ansteuern
+            domain_data = self.hass.data.get(DOMAIN, {})
+            for key, value in domain_data.items():
+                if not isinstance(value, dict):
+                    continue
+                entities = value.get("entities")
+                if not entities:
+                    continue
+                for entity in entities:
+                    if isinstance(entity, SonClouTRVClimate):
+                        # Best-effort: ignore individual errors per entity
+                        self.hass.async_create_task(entity._async_handle_window_sensor(is_open))
+        else:
+            # Lokaler Scope: nur dieses Thermostat beeinflussen
+            await self._async_handle_window_sensor(is_open)
+
+    async def _async_handle_window_sensor(self, is_open: bool) -> None:
+        """Apply window sensor state to this climate entity.
+
+        When a window is reported open, we immediately freeze PID control and
+        close the valve. When all windows are reported closed again, we end the
+        freeze, reset Integratoren und stoßen einen Regelzyklus an.
+        """
+        if is_open:
+            if not self._window_freeze_active:
+                self._window_freeze_active = True
+                self._window_freeze_start = dt_util.now()
+                self._window_start_temp = self._attr_current_temperature
+                self._window_min_temp = self._attr_current_temperature
+                _LOGGER.info("%s: Window sensor open -> freezing valve control", self.name)
+
+            # Sofort Ventil schließen
+            if self._last_set_valve_opening != 0:
+                await self._async_set_valve_opening(0)
+            self._active = False
+            self._update_extra_attributes()
+            self.async_write_ha_state()
+            return
+
+        # Fenster sind wieder geschlossen
+        if self._window_freeze_active:
+            _LOGGER.info("%s: Window sensors closed -> resuming PID control", self.name)
+            self._window_freeze_active = False
+            # Integratoren für diesen Raum zurücksetzen
+            self._integral_error = 0.0
+            state = self._get_room_pid_state()
+            state.integral_error = 0.0
+            state.prev_error = 0.0
+            # Fenster-Hilfswerte löschen
+            self._window_start_temp = None
+            self._window_min_temp = None
+
+            # Sofortige Neuberechnung anstoßen
+            if self._update_timer:
+                self._update_timer()
+                self._update_timer = None
+            await self._async_control_heating()
+
     async def _async_sync_temperature_calibration(self) -> None:
         """Sync external temperature sensor with TRV via external temperature input."""
         if self._attr_current_temperature is None:

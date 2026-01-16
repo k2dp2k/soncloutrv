@@ -36,6 +36,13 @@ CONF_WEATHER_ENTITY = "weather_entity"
 CONF_WINDOW_DROP_THRESHOLD = "window_drop_threshold"
 CONF_WINDOW_STABLE_BAND = "window_stable_band"
 CONF_WINDOW_MAX_FREEZE = "window_max_freeze"
+# Optional Fenster-/Türsensoren für explizite Fenstererkennung
+CONF_WINDOW_SENSORS = "window_sensors"
+CONF_WINDOW_SENSOR_SCOPE = "window_sensor_scope"
+
+# Fenster-Scope-Werte
+WINDOW_SCOPE_LOCAL = "local"
+WINDOW_SCOPE_ALL = "all"
 
 # Control modes
 CONTROL_MODE_BINARY = "binary"

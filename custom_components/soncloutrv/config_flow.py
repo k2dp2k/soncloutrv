@@ -58,6 +58,10 @@ from .const import (
     DEFAULT_WINDOW_DROP_THRESHOLD,
     DEFAULT_WINDOW_STABLE_BAND,
     DEFAULT_WINDOW_MAX_FREEZE,
+    CONF_WINDOW_SENSORS,
+    CONF_WINDOW_SENSOR_SCOPE,
+    WINDOW_SCOPE_LOCAL,
+    WINDOW_SCOPE_ALL,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -155,6 +159,25 @@ class SonClouTRVConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 ),
                 vol.Optional(CONF_OUTSIDE_TEMP_SENSOR): selector.EntitySelector(
                     selector.EntitySelectorConfig(domain=["sensor", "weather"], device_class="temperature")
+                ),
+                vol.Optional(CONF_WINDOW_SENSORS): selector.EntitySelector(
+                    selector.EntitySelectorConfig(
+                        domain="binary_sensor",
+                        device_class=["window", "door"],
+                        multiple=True,
+                    )
+                ),
+                vol.Optional(
+                    CONF_WINDOW_SENSOR_SCOPE,
+                    default=WINDOW_SCOPE_LOCAL,
+                ): selector.SelectSelector(
+                    selector.SelectSelectorConfig(
+                        options=[
+                            {"value": WINDOW_SCOPE_LOCAL, "label": "Nur dieses Thermostat"},
+                            {"value": WINDOW_SCOPE_ALL, "label": "Alle SonTRV-Thermostate"},
+                        ],
+                        mode=selector.SelectSelectorMode.DROPDOWN,
+                    )
                 ),
                 vol.Optional(CONF_MIN_TEMP, default=DEFAULT_MIN_TEMP): vol.All(
                     vol.Coerce(float), vol.Range(min=5, max=35)
@@ -264,7 +287,35 @@ class SonClouTRVOptionsFlow(config_entries.OptionsFlow):
                         CONF_WINDOW_MAX_FREEZE,
                         self.config_entry.data.get(CONF_WINDOW_MAX_FREEZE, DEFAULT_WINDOW_MAX_FREEZE),
                     ),
-                ): vol.All(vol.Coerce(int), vol.Range(min=60, max=7200)),
+                ): vol.All(vol.Coerce(int), vol.Range(min=60, max=43200)),
+                vol.Optional(
+                    CONF_WINDOW_SENSORS,
+                    default=self.config_entry.options.get(
+                        CONF_WINDOW_SENSORS,
+                        self.config_entry.data.get(CONF_WINDOW_SENSORS, []),
+                    ),
+                ): selector.EntitySelector(
+                    selector.EntitySelectorConfig(
+                        domain="binary_sensor",
+                        device_class=["window", "door"],
+                        multiple=True,
+                    )
+                ),
+                vol.Optional(
+                    CONF_WINDOW_SENSOR_SCOPE,
+                    default=self.config_entry.options.get(
+                        CONF_WINDOW_SENSOR_SCOPE,
+                        self.config_entry.data.get(CONF_WINDOW_SENSOR_SCOPE, WINDOW_SCOPE_LOCAL),
+                    ),
+                ): selector.SelectSelector(
+                    selector.SelectSelectorConfig(
+                        options=[
+                            {"value": WINDOW_SCOPE_LOCAL, "label": "Nur dieses Thermostat"},
+                            {"value": WINDOW_SCOPE_ALL, "label": "Alle SonTRV-Thermostate"},
+                        ],
+                        mode=selector.SelectSelectorMode.DROPDOWN,
+                    )
+                ),
                 vol.Optional(
                     CONF_MIN_TEMP,
                     default=self.config_entry.data.get(CONF_MIN_TEMP, DEFAULT_MIN_TEMP),
