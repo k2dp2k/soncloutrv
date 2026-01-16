@@ -249,9 +249,28 @@ class SonClouTRVOptionsFlow(config_entries.OptionsFlow):
             {
                 vol.Optional(
                     CONF_OUTSIDE_TEMP_SENSOR,
-                    description={"suggested_value": self.config_entry.data.get(CONF_OUTSIDE_TEMP_SENSOR, self.config_entry.data.get(CONF_WEATHER_ENTITY))},
+                    description={"suggested_value": self.config_entry.data.get(
+                        CONF_OUTSIDE_TEMP_SENSOR,
+                        self.config_entry.data.get(CONF_WEATHER_ENTITY),
+                    )},
                 ): selector.EntitySelector(
-                    selector.EntitySelectorConfig(domain=["sensor", "weather"], device_class="temperature")
+                    selector.EntitySelectorConfig(
+                        domain=["sensor", "weather"],
+                        device_class="temperature",
+                    )
+                ),
+                # Erlaube das nachträgliche Ändern des externen Temperatursensors
+                vol.Optional(
+                    CONF_TEMP_SENSOR,
+                    default=self.config_entry.options.get(
+                        CONF_TEMP_SENSOR,
+                        self.config_entry.data.get(CONF_TEMP_SENSOR),
+                    ),
+                ): selector.EntitySelector(
+                    selector.EntitySelectorConfig(
+                        domain="sensor",
+                        device_class="temperature",
+                    )
                 ),
                 vol.Optional(
                     CONF_ROOM_LOGGING_ENABLED,

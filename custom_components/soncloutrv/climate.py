@@ -449,6 +449,14 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
                     self._config,
                     DEFAULT_WINDOW_MAX_FREEZE,
                 )
+
+                # Allow changing the external temperature sensor via options
+                self._temp_sensor = self._get_config_value(
+                    CONF_TEMP_SENSOR,
+                    self._config,
+                    self._temp_sensor,
+                )
+
                 # Optional Fenster-/Türsensoren (Liste von binary_sensor-Entitäten)
                 self._window_sensors = self._get_config_value(
                     CONF_WINDOW_SENSORS,
