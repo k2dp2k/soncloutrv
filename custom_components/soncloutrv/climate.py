@@ -310,6 +310,10 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
         # Window / sudden-drop detection state
         self._window_freeze_active = False
         self._window_freeze_start = None
+        # Temperatur direkt vor dem erkannten Drop (zum Vergleich nach dem Event)
+        self._window_start_temp = None
+        # Bisher niedrigste Temperatur während des Freeze (Talpunkt)
+        self._window_min_temp = None
         self._window_drop_threshold = DEFAULT_WINDOW_DROP_THRESHOLD
         self._window_stable_band = DEFAULT_WINDOW_STABLE_BAND
         self._window_max_freeze = DEFAULT_WINDOW_MAX_FREEZE
@@ -687,8 +691,12 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
             should_trigger_immediate = True # First update or unavailable state
             
         if sudden_drop_detected:
+            now_ts = dt_util.now()
             self._window_freeze_active = True
-            self._window_freeze_start = dt_util.now()
+            self._window_freeze_start = now_ts
+            # Merke die Temperatur direkt vor bzw. zum Zeitpunkt des Drops
+            self._window_start_temp = self._attr_current_temperature
+            self._window_min_temp = self._attr_current_temperature
             _LOGGER.info(
                 "%s: Sudden temperature drop detected (possible window open) - freezing valve control",
                 self.name,
@@ -815,6 +823,14 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
                 now = dt_util.now()
                 self._temp_history.append(new_temp)
                 self._temp_time_history.append(now)
+                # Während eines Fenster-Freeze die minimale Temperatur
+                # nachführen, um später die "Erholung" bewerten zu können.
+                if self._window_freeze_active:
+                    if self._window_min_temp is None:
+                        self._window_min_temp = new_temp
+                    else:
+                        if new_temp < self._window_min_temp:
+                            self._window_min_temp = new_temp
                 # Keep a reasonable history length (e.g. last 20 readings)
                 if len(self._temp_history) > 20:
                     self._temp_history.pop(0)
@@ -864,12 +880,22 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
             return
 
         # If we previously detected a sudden temperature drop (window open),
-        # keep the current valve state until the temperature stabilizes again
-        # or a maximum freeze duration has passed.
+        # keep the current valve state until the temperature stabilizes wieder
+        # oder eine maximale Einfrierzeit überschritten ist. Während dieser
+        # Phase wird kein neues PID-Lernen durchgeführt.
         if self._window_freeze_active:
             if self._is_window_freeze_over():
                 _LOGGER.info("%s: Temperature stabilized after suspected window event - resuming PID control", self.name)
                 self._window_freeze_active = False
+                # Beim Ende des Fenster-Events den Integrator entschärfen,
+                # damit wir mit einem möglichst neutralen Lernzustand starten.
+                self._integral_error = 0.0
+                state = self._get_room_pid_state()
+                state.integral_error = 0.0
+                state.prev_error = 0.0
+                # Reset der Fenster-spezifischen Hilfswerte
+                self._window_start_temp = None
+                self._window_min_temp = None
             else:
                 _LOGGER.debug(
                     "%s: Window event active, keeping valve at %d%%",
@@ -941,15 +967,35 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
             return True
 
         now = dt_util.now()
+        # 1) Harte Obergrenze für die Freeze-Dauer (Failsafe)
         if self._window_freeze_start is not None:
             if (now - self._window_freeze_start).total_seconds() > self._window_max_freeze:
+                _LOGGER.info(
+                    "%s: Window freeze exceeded max duration (%ds) - resuming PID control",
+                    self.name,
+                    self._window_max_freeze,
+                )
                 return True
 
-        # Check recent temperature history for stability
-        if len(self._temp_history) >= 3:
+        # 2) Prüfen, ob Temperaturverlauf wieder "erholt" ist:
+        #    - Letzte Werte innerhalb der Stabilitätsbandbreite
+        #    - und signifikant über dem bisher tiefsten Punkt
+        if len(self._temp_history) >= 3 and self._window_min_temp is not None:
             recent = self._temp_history[-3:]
             if max(recent) - min(recent) <= self._window_stable_band:
-                return True
+                last_temp = recent[-1]
+                # Aktualisiere window_min_temp mit allen bisherigen Werten
+                global_min = min(self._temp_history)
+                self._window_min_temp = min(self._window_min_temp, global_min)
+                if last_temp >= self._window_min_temp + self._window_stable_band:
+                    _LOGGER.info(
+                        "%s: Temperature recovered after suspected window event (last=%.2f, min=%.2f, band=%.2f) - resuming PID control",
+                        self.name,
+                        last_temp,
+                        self._window_min_temp,
+                        self._window_stable_band,
+                    )
+                    return True
 
         return False
     

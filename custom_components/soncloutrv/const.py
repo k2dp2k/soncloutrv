@@ -96,7 +96,8 @@ DEFAULT_ROOM_LOG_FILE = "sontrv_room_log.csv"
 # Window detection defaults
 DEFAULT_WINDOW_DROP_THRESHOLD = 0.8  # °C Sprung nach unten zwischen zwei Messungen
 DEFAULT_WINDOW_STABLE_BAND = 0.3     # °C Bandbreite für "stabil wieder"
-DEFAULT_WINDOW_MAX_FREEZE = 1800     # Sekunden (30 Minuten) maximale Einfrierzeit
+# Maximale Einfrierzeit: 3 Stunden (Fenster-/Tür-Öffnungen können länger dauern)
+DEFAULT_WINDOW_MAX_FREEZE = 10800    # Sekunden (3 Stunden) maximale Einfrierzeit
 
 # Attributes
 ATTR_VALVE_POSITION = "valve_position"
