@@ -332,6 +332,21 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
         else:
             self._window_sensors = []
         self._window_sensor_scope = config.get(CONF_WINDOW_SENSOR_SCOPE, WINDOW_SCOPE_LOCAL)
+
+        # Zustand direkt VOR einem Fenster-Event (für sanften Wiederanlauf)
+        self._pre_window_valve_opening: int | None = None
+        self._pre_window_integral: float | None = None
+        # Post-Window-Phase: Zeitraum, in dem wir Ausgang und Schrittweite
+        # begrenzen, um ein "Vollgas" nach dem Fenster zu vermeiden.
+        self._post_window_soft_mode_until = None
+        # Max. zusätzliche Ventil-Öffnung (in %-Punkten Ventilöffnung) im
+        # ersten Schritt nach dem Fenster, relativ zum Wert vor dem Event.
+        self._post_window_max_step: int = 20
+        # Obergrenze für Ventilöffnung (in % des konfigurierten Max) während
+        # der soften Wiederanlaufphase.
+        self._post_window_max_output_percent: float = 60.0
+        # Dauer der soften Phase nach Fensterende in Sekunden.
+        self._post_window_soft_duration: int = 3600
         
         # Debug values
         self._last_p = 0.0
@@ -742,6 +757,10 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
             
         if sudden_drop_detected:
             now_ts = dt_util.now()
+            # Zustand VOR dem Fenster-Ereignis merken (Ventilstellung,
+            # Integrator), damit wir danach sanfter wieder anfahren können.
+            if not self._window_freeze_active:
+                self._remember_pre_window_state()
             self._window_freeze_active = True
             self._window_freeze_start = now_ts
             # Merke die Temperatur direkt vor bzw. zum Zeitpunkt des Drops
@@ -935,17 +954,30 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
         # Phase wird kein neues PID-Lernen durchgeführt.
         if self._window_freeze_active:
             if self._is_window_freeze_over():
-                _LOGGER.info("%s: Temperature stabilized after suspected window event - resuming PID control", self.name)
+                _LOGGER.info("%s: Temperature stabilized after suspected window event - resuming PID control (soft post-window phase)", self.name)
                 self._window_freeze_active = False
+
                 # Beim Ende des Fenster-Events den Integrator entschärfen,
-                # damit wir mit einem möglichst neutralen Lernzustand starten.
-                self._integral_error = 0.0
+                # aber nicht komplett löschen – wir skalieren den Vor-Fenster-
+                # Wert auf einen kleineren Anteil herunter.
                 state = self._get_room_pid_state()
-                state.integral_error = 0.0
+                if self._pre_window_integral is not None:
+                    reduced = self._pre_window_integral * 0.3
+                    state.integral_error = reduced
+                    self._integral_error = reduced
+                else:
+                    state.integral_error = 0.0
+                    self._integral_error = 0.0
                 state.prev_error = 0.0
+
                 # Reset der Fenster-spezifischen Hilfswerte
                 self._window_start_temp = None
                 self._window_min_temp = None
+
+                # Soft-Phase nach Fensterende aktivieren
+                self._post_window_soft_mode_until = dt_util.now() + timedelta(
+                    seconds=self._post_window_soft_duration
+                )
             else:
                 _LOGGER.debug(
                     "%s: Window event active, keeping valve at %d%%",
@@ -1064,6 +1096,24 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
         return False
     
     @callback
+    def _remember_pre_window_state(self) -> None:
+        """Speichere den Zustand direkt vor einem Fenster-Event.
+
+        Dazu gehören insbesondere die zuletzt gesetzte Ventilöffnung und der
+        Raum-Integrator. Diese Informationen verwenden wir nach dem Event, um
+        Schrittweite und Ausgang zu begrenzen.
+        """
+        if self._last_set_valve_opening is not None and self._last_set_valve_opening >= 0:
+            self._pre_window_valve_opening = int(self._last_set_valve_opening)
+        else:
+            self._pre_window_valve_opening = 0
+
+        state = self._get_room_pid_state()
+        self._pre_window_integral = state.integral_error
+        # Eine neue Fenster-Phase startet – vorherige Soft-Phase verwerfen.
+        self._post_window_soft_mode_until = None
+
+    @callback
     async def _async_window_sensor_changed(self, event) -> None:
         """Handle window/door binary sensor changes.
 
@@ -1108,6 +1158,8 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
         """
         if is_open:
             if not self._window_freeze_active:
+                # Zustand vor Fensterbeginn merken
+                self._remember_pre_window_state()
                 self._window_freeze_active = True
                 self._window_freeze_start = dt_util.now()
                 self._window_start_temp = self._attr_current_temperature
@@ -1124,16 +1176,30 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
 
         # Fenster sind wieder geschlossen
         if self._window_freeze_active:
-            _LOGGER.info("%s: Window sensors closed -> resuming PID control", self.name)
+            _LOGGER.info("%s: Window sensors closed -> resuming PID control (soft post-window phase)", self.name)
             self._window_freeze_active = False
-            # Integratoren für diesen Raum zurücksetzen
-            self._integral_error = 0.0
+
+            # Integrator nicht komplett löschen, sondern auf einen Bruchteil
+            # des Vor-Fenster-Werts setzen, damit der Raum sein "Gedächtnis"
+            # behält, aber nicht übersteuert.
             state = self._get_room_pid_state()
-            state.integral_error = 0.0
+            if self._pre_window_integral is not None:
+                reduced = self._pre_window_integral * 0.3
+                state.integral_error = reduced
+                self._integral_error = reduced
+            else:
+                state.integral_error = 0.0
+                self._integral_error = 0.0
             state.prev_error = 0.0
+
             # Fenster-Hilfswerte löschen
             self._window_start_temp = None
             self._window_min_temp = None
+
+            # Soft-Phase nach Fensterende aktivieren
+            self._post_window_soft_mode_until = dt_util.now() + timedelta(
+                seconds=self._post_window_soft_duration
+            )
 
             # Sofortige Neuberechnung anstoßen
             if self._update_timer:
@@ -1457,6 +1523,29 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
         # OR: clamp strictly to max_valve_position?
         # Usually: PID output 0-100% corresponds to valve 0-Max
         final_desired = int((desired_percent / 100.0) * self._max_valve_position)
+
+        # Soft-Phase nach Fensterende: Ausgang und Schrittweite begrenzen.
+        now_soft = dt_util.now()
+        if self._post_window_soft_mode_until is not None and now_soft < self._post_window_soft_mode_until:
+            # 1) Maximaler Sprung relativ zum Vor-Fenster-Wert
+            if self._pre_window_valve_opening is not None:
+                upper_limit = self._pre_window_valve_opening + self._post_window_max_step
+                if upper_limit > self._max_valve_position:
+                    upper_limit = self._max_valve_position
+                if final_desired > upper_limit:
+                    final_desired = upper_limit
+
+            # 2) Absolute Obergrenze bezogen auf max_valve_position
+            soft_cap = int(
+                (self._post_window_max_output_percent / 100.0) * self._max_valve_position
+            )
+            if final_desired > soft_cap:
+                final_desired = soft_cap
+        elif self._post_window_soft_mode_until is not None and now_soft >= self._post_window_soft_mode_until:
+            # Soft-Phase ist abgelaufen – Marker zurücksetzen
+            self._post_window_soft_mode_until = None
+            self._pre_window_valve_opening = None
+            self._pre_window_integral = None
 
         # Anwenden der Hysterese um den Sollwert:
         # - Wenn der Raum deutlich zu warm ist (error < -hysteresis), Ventil sicher schließen.
