@@ -1561,6 +1561,28 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
         # where the TRVs actually work against the building inertia.
         if self._room_logging_enabled and heating_on:
             # Use the same timestamp "now" used for dt calculation
+            # Zusätzlich Fenster-/Sensorzustand erfassen
+            window_freeze = self._window_freeze_active
+            post_window_soft = (
+                self._post_window_soft_mode_until is not None
+                and dt_util.now() < self._post_window_soft_mode_until
+            )
+            window_sensor_open = False
+            if self._window_sensors:
+                for entity_id in self._window_sensors:
+                    state_entity = self.hass.states.get(entity_id)
+                    if state_entity and state_entity.state not in (
+                        STATE_UNAVAILABLE,
+                        STATE_UNKNOWN,
+                    ):
+                        if str(state_entity.state).lower() == "on":
+                            window_sensor_open = True
+                            break
+            window_sensor_scope = (
+                self._window_sensor_scope if self._window_sensors else "none"
+            )
+            window_sensors_str = ",".join(self._window_sensors) if self._window_sensors else ""
+
             self.hass.async_add_executor_job(
                 self._append_room_log_row,
                 now,
@@ -1570,6 +1592,11 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
                 current_temp,
                 target_temp,
                 self._outside_temperature,
+                window_freeze,
+                window_sensor_open,
+                window_sensor_scope,
+                window_sensors_str,
+                post_window_soft,
             )
         
         # Hysteresis / Minimum movement check (Deadband on OUTPUT, not just error)
@@ -1602,6 +1629,11 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
         current_temp: float,
         target_temp: float,
         outside_temp: float | None,
+        window_freeze_active: bool,
+        window_sensor_open: bool,
+        window_sensor_scope: str,
+        window_sensors: str,
+        post_window_soft_active: bool,
     ) -> None:
         """Append a single CSV row with room / valve state for offline analysis.
 
@@ -1638,6 +1670,11 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
             "pid_d",
             "pid_ff",
             "pid_integral_error",
+            "window_freeze_active",
+            "window_sensor_open",
+            "window_sensor_scope",
+            "window_sensors",
+            "post_window_soft_active",
         ]
 
         row = [
@@ -1663,6 +1700,11 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
             self._last_d,
             self._last_ff,
             self._integral_error,
+            int(window_freeze_active),
+            int(window_sensor_open),
+            window_sensor_scope,
+            window_sensors,
+            int(post_window_soft_active),
         ]
 
         try:
