@@ -233,6 +233,28 @@ entities:
 
 ---
 
+## 📑 Raum-CSV-Logging (`sontrv_room_log.csv`)
+
+Zusätzlich zu den hier beschriebenen Advanced-Sensoren kann SonTRV optional eine
+CSV-Datei mit Raum- und Reglerdaten schreiben (Standardpfad: `sontrv_room_log.csv`
+im Home-Assistant-Konfigurationsverzeichnis).
+
+Wichtige Spalten sind u.a.:
+- `room_temp`, `target_temp`, `error`
+- `room_demand_percent`, `valve_opening_percent`, `max_valve_position`
+- `outside_temp`, `outside_sensor`
+- `kp`, `ki`, `kd`, `ka`, `pid_p`, `pid_i`, `pid_d`, `pid_ff`, `pid_integral_error`
+- `window_freeze_active` – ob ein Fenster-/Freeze-Event aktiv ist
+- `window_sensor_open` – ob mindestens ein konfigurierter Fenster-/Türsensor "on" meldet
+- `window_sensor_scope` – "local", "all" oder "none"
+- `window_sensors` – kommaseparierte Liste der Sensor-Entitäten
+- `post_window_soft_active` – ob die sanfte Post-Fenster-Phase aktiv ist
+
+Damit lassen sich z.B. Temperaturverlauf, Heizleistung und Fensterverhalten gemeinsam
+auswerten und für spätere ML- oder Dashboard-Analysen verwenden.
+
+---
+
 ## 🔔 Automatisierungs-Beispiele
 
 ### Verkalkungsschutz-Warnung

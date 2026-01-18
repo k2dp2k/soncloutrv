@@ -18,6 +18,9 @@ SonTRV ist eine Home Assistant Custom Integration **speziell für Flächenheizun
 - 📊 **5 Ventilöffnungsstufen** - Präzise Kontrolle: 0%, 20%, 40%, 60%, 80%, 100%
 - 🛡️ **Verkalkungsschutz** - Automatisches Ventil-Durchbewegen alle 7 Tage
 - 📈 **Umfangreiche Sensoren** - Ventilposition, Batterie, Temperaturdifferenz, Durchschnitt
+- 🚪 **Intelligente Fenster-Erkennung** - Kombination aus Temperatur-Drop und optionalen Fenster-/Türsensoren (lokal oder global)
+- 🧊 **Fenster-Freeze & sanfter Wiederanlauf** - Heizung pausiert bei offenem Fenster und fährt danach gedrosselt wieder an
+- 📑 **Raum-CSV-Logging** - Loggt PID-Interna, Fensterzustand und Soft-Phase für detaillierte Analysen
 - 🔧 **Live-Konfiguration** - Alle Parameter über die UI anpassbar
 - 🇩🇪 **Vollständige deutsche Übersetzung**
 
@@ -74,7 +77,7 @@ homeassistant-heating-analysis/
 3. Folge dem Setup-Assistenten:
    - **Name:** Beliebiger Name (z.B. "TRV_Bad", "TRV_Wohnzimmer")
    - **SONOFF TRVZB Entity:** Wähle dein `climate.heizung_*_fussboden` Entity
-   - **Temperatursensor:** Wähle deinen externen Sensor (z.B. `sensor.temperatur_badezimmer`)
+   - **Temperatursensor:** Wähle deinen externen Sensor (z.B. `sensor.temperatur_badezimmer`) – kann später in den Optionen geändert werden
    - **Temperaturbereich:** Min/Max Temperatur festlegen
    - **Zieltemperatur:** Standard-Solltemperatur
    - **Ventilöffnungsstufe:** Wähle zwischen * (0%), 1-5 (20%-100%)
@@ -153,12 +156,40 @@ Der PID-Regler berechnet die Ventilöffnung als Summe aus:
 
 | Preset | Öffnung | Verwendung |
 |--------|---------|------------|
-| **\*** | 0% | Ventil geschlossen / Aus |
+| **\\*** | 0% | Ventil geschlossen / Aus |
 | **1** | 20% | Minimale Heizleistung |
 | **2** | 40% | Niedrige Heizleistung |
 | **3** | 60% | Mittlere Heizleistung |
 | **4** | 80% | Standard für Fußbodenheizung |
 | **5** | 100% | Maximale Heizleistung |
+
+### Fenster-/Türsensoren & Fenster-Freeze
+
+- Optional können pro Thermostat ein oder mehrere `binary_sensor`-Entitäten mit `device_class` `window`/`door` hinterlegt werden.
+- Zusätzlich gibt es einen **Scope**:
+  - **Nur dieses Thermostat (local):** Nur der gewählte SonTRV reagiert auf die Sensoren.
+  - **Alle SonTRV-Thermostate (all):** Ein offenes Fenster pausiert alle SonTRV-Regler in der Wohnung.
+- Bei offenem Fenster:
+  - Wird das Ventil sofort geschlossen.
+  - Die PID-Regelung (inkl. Lernen) wird eingefroren.
+- Nach dem Schließen aller relevanten Fenster:
+  - Wird der Integrator auf einen Bruchteil des Vor-Fenster-Werts reduziert (sanfter Neustart).
+  - Eine **Soft-Phase** (Standard: 1 Stunde) begrenzt Ventilsprung und maximale Öffnung, um ein "Vollgas" zu vermeiden.
+  - Danach regelt der PID wieder frei.
+- Wenn **keine Sensoren** konfiguriert sind, bleibt die **Temperatur-basierte Fenstererkennung** als Fallback aktiv (plötzlicher Drop über Schwellwert).
+
+### Raum-CSV-Logging
+
+- Optionales Logging in eine CSV-Datei (Standard: `sontrv_room_log.csv` im Home-Assistant-Konfigurationsverzeichnis).
+- Kann pro Thermostat in den Optionen aktiviert/deaktiviert werden.
+- Loggt u.a.:
+  - Raumtemperatur, Sollwert, Fehler
+  - PID-Output (room_demand_percent) und tatsächliche Ventilöffnung
+  - PID-Parameter und -Anteile (`kp`, `ki`, `pid_p`, `pid_i`, `pid_d`, `pid_ff`, `pid_integral_error`)
+  - Außentemperatur und verwendeter Außensensor
+  - Fensterzustand (`window_freeze_active`, `window_sensor_open`, `window_sensor_scope`, `window_sensors`)
+  - Status der soften Post-Fenster-Phase (`post_window_soft_active`)
+- Die CSV eignet sich für detaillierte Analyse, Visualisierung und zukünftiges ML-basiertes Tuning.
 
 ### Empfohlene Einstellungen
 
