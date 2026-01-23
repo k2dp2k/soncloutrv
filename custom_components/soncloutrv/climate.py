@@ -984,6 +984,62 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
                     self.name,
                     self._last_set_valve_opening,
                 )
+
+                # Optional: während des Freezes einen Log-Eintrag schreiben, damit
+                # Fenster-Phasen auch in der CSV sichtbar sind.
+                if self._room_logging_enabled:
+                    now_ts = dt_util.now()
+                    current_temp = self._attr_current_temperature
+                    target_temp = self._attr_target_temperature
+                    if current_temp is not None and target_temp is not None:
+                        error = target_temp - current_temp
+                    else:
+                        error = 0.0
+                    room_demand = 0.0
+                    valve_opening = (
+                        self._last_set_valve_opening
+                        if self._last_set_valve_opening is not None
+                        and self._last_set_valve_opening >= 0
+                        else 0
+                    )
+                    window_freeze = True
+                    post_window_soft = False
+
+                    # Aggregierten Sensorzustand bestimmen
+                    window_sensor_open = False
+                    if self._window_sensors:
+                        for entity_id in self._window_sensors:
+                            state_entity = self.hass.states.get(entity_id)
+                            if state_entity and state_entity.state not in (
+                                STATE_UNAVAILABLE,
+                                STATE_UNKNOWN,
+                            ):
+                                if str(state_entity.state).lower() == "on":
+                                    window_sensor_open = True
+                                    break
+                    window_sensor_scope = (
+                        self._window_sensor_scope if self._window_sensors else "none"
+                    )
+                    window_sensors_str = (
+                        ",".join(self._window_sensors) if self._window_sensors else ""
+                    )
+
+                    self.hass.async_add_executor_job(
+                        self._append_room_log_row,
+                        now_ts,
+                        error,
+                        room_demand,
+                        valve_opening,
+                        current_temp,
+                        target_temp,
+                        self._outside_temperature,
+                        window_freeze,
+                        window_sensor_open,
+                        window_sensor_scope,
+                        window_sensors_str,
+                        post_window_soft,
+                    )
+
                 await self._async_schedule_next_update()
                 return
 
@@ -1429,12 +1485,18 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
             # Bereich für I-Anteil:
             # - |error| < hysteresis: Integral langsam abbauen (kein Nachziehen mehr nötig)
             # - hysteresis <= |error| <= 1.0 K: normal integrieren (Feinkorrektur)
-            # - |error| > 1.0 K: Aufheizphase, hier übernimmt hauptsächlich P, kein weiteres Aufbauen
+            # - |error| > 1.0 K: Aufheiz-/Abkühlphase, hier soll hauptsächlich P arbeiten und
+            #   der I-Anteil langsam in Richtung 0 "auslaufen" (Leak), statt eingefroren zu bleiben.
             if abs_err < self._hysteresis:
                 # Langsames Zurückfahren des Integrals in Richtung 0
                 state.integral_error *= 0.9
             elif abs_err <= 1.0:
+                # Feinkorrektur im Bereich bis +/-1K
                 state.integral_error += error * dt
+            else:
+                # Deutliche Über- oder Untertemperatur: I-Anteil sanft abbauen, um extrem
+                # große Beträge in langen Phasen (z.B. stark aufgeheiztes Bad) zu vermeiden.
+                state.integral_error *= 0.95
 
             # Anti-Windup: max. +/-100% Beitrag durch I-Anteil
             max_integral = 100.0 / effective_ki
