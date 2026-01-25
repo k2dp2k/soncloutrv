@@ -341,15 +341,14 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
         self._post_window_soft_mode_until = None
         # Max. zusätzliche Ventil-Öffnung (in %-Punkten Ventilöffnung) im
         # ersten Schritt nach dem Fenster, relativ zum Wert vor dem Event.
-        # Etwas großzügiger, damit Räume nach einem langen Fenster-Event (stark
-        # ausgekühltes Wohnzimmer) schneller wieder auf Soll kommen.
-        self._post_window_max_step: int = 30
+        # Konservativ, um nach Fenster-Events nicht zu viel Energie in den
+        # Raum zu schieben.
+        self._post_window_max_step: int = 20
         # Obergrenze für Ventilöffnung (in % des konfigurierten Max) während
         # der soften Wiederanlaufphase.
-        self._post_window_max_output_percent: float = 80.0
+        self._post_window_max_output_percent: float = 60.0
         # Dauer der soften Phase nach Fensterende in Sekunden.
-        # Kürzer, damit die Begrenzung nicht zu lange wirkt.
-        self._post_window_soft_duration: int = 1800
+        self._post_window_soft_duration: int = 3600
         
         # Debug values
         self._last_p = 0.0
@@ -1487,21 +1486,21 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
             abs_err = abs(error)
             # Bereich für I-Anteil:
             # - |error| < hysteresis: Integral langsam abbauen (kein Nachziehen mehr nötig)
-            # - hysteresis <= |error| <= 1.0 K: normal integrieren (Feinkorrektur), aber nur,
-            #   wenn der Raum zu kalt ist (error > 0). Bei zu warmem Raum bauen wir den
-            #   Integrator ab, statt weiter ins Negative zu integrieren.
+            # - hysteresis <= |error| <= 1.0 K: nur integrieren, wenn der Raum deutlich zu
+            #   kalt ist (error > 0.5K). In der Nähe des Sollwerts (0 < error <= 0.5K)
+            #   sowie bei zu warmem Raum (error <= 0) bauen wir den Integrator ab.
             # - |error| > 1.0 K: Aufheiz-/Abkühlphase, hier soll hauptsächlich P arbeiten und
             #   der I-Anteil langsam in Richtung 0 "auslaufen" (Leak), statt eingefroren zu bleiben.
             if abs_err < self._hysteresis:
                 # Langsames Zurückfahren des Integrals in Richtung 0
                 state.integral_error *= 0.9
             elif abs_err <= 1.0:
-                if error > 0:
-                    # Feinkorrektur im Bereich bis +1K – nur integrieren, wenn der Raum zu kalt ist
+                if error > 0.5:
+                    # Deutlich zu kalt: I-Anteil aufbauen
                     state.integral_error += error * dt
                 else:
-                    # Raum ist bereits zu warm, aber nicht extrem: Integrator leicht abbauen,
-                    # damit keine großen negativen I-Werte entstehen.
+                    # 0 < error <= 0.5 oder error <= 0: schon nah am Soll oder zu warm,
+                    # Integrator abbauen, um Nachregeln und Überschwingen zu vermeiden.
                     state.integral_error *= 0.9
             else:
                 # Deutliche Über- oder Untertemperatur: I-Anteil sanft abbauen, um extrem
