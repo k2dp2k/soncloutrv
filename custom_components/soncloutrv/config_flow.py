@@ -222,6 +222,10 @@ class SonClouTRVConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 class SonClouTRVOptionsFlow(config_entries.OptionsFlow):
     """Handle options flow for SonClouTRV."""
 
+    def __init__(self, config_entry: config_entries.ConfigEntry) -> None:
+        """Store config entry for use in the options flow."""
+        self.config_entry = config_entry
+
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
     ) -> config_entries.FlowResult:
