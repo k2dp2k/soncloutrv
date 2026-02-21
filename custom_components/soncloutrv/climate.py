@@ -1176,8 +1176,9 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
         """Handle window/door binary sensor changes.
 
         Any configured sensor in state "on" is treated as "window open".
-        Depending on the configured scope this affects nur dieses Thermostat
-        oder alle SonTRV-Thermostate.
+        Depending on the configured scope this affects entweder nur den Raum
+        (alle SonTRV-Thermostate mit gleicher room_id/room_key) oder global
+        alle SonTRV-Thermostate.
         """
         # Determine aggregated "is any window open?" state from all configured sensors
         is_open = False
@@ -1189,10 +1190,14 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
                         is_open = True
                         break
 
-        # Apply according to scope
+        # Determine targets according to scope
+        domain_data = self.hass.data.get(DOMAIN, {})
+        rooms = domain_data.get("rooms", {})
+        room_entities = rooms.get(self._room_key, []) or []
+        targets: list[SonClouTRVClimate] = []
+
         if self._window_sensor_scope == WINDOW_SCOPE_ALL:
             # Global scope: alle SonTRV-Klimas aus hass.data[DOMAIN] ansteuern
-            domain_data = self.hass.data.get(DOMAIN, {})
             for key, value in domain_data.items():
                 if not isinstance(value, dict):
                     continue
@@ -1201,11 +1206,25 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
                     continue
                 for entity in entities:
                     if isinstance(entity, SonClouTRVClimate):
-                        # Best-effort: ignore individual errors per entity
-                        self.hass.async_create_task(entity._async_handle_window_sensor(is_open))
+                        targets.append(entity)
         else:
-            # Lokaler Scope: nur dieses Thermostat beeinflussen
-            await self._async_handle_window_sensor(is_open)
+            # Lokaler Scope: alle Thermostate im gleichen Raum (gleiche room_id/room_key)
+            for entity in room_entities:
+                if isinstance(entity, SonClouTRVClimate):
+                    targets.append(entity)
+
+            # Fallback: falls der Raum-Index noch nicht aufgebaut ist, zumindest
+            # das aktuelle Thermostat ansteuern.
+            if not targets:
+                targets.append(self)
+
+        # Aktionen auf die Ziel-Entities anwenden. Das aktuelle Entity direkt
+        # awaiten, alle anderen per Task, damit wir nicht blockieren.
+        for entity in targets:
+            if entity is self:
+                await self._async_handle_window_sensor(is_open)
+            else:
+                self.hass.async_create_task(entity._async_handle_window_sensor(is_open))
 
     async def _async_handle_window_sensor(self, is_open: bool) -> None:
         """Apply window sensor state to this climate entity.
@@ -1378,7 +1397,11 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
         return time_since_last_update >= self._min_valve_update_interval
     
     def _get_room_pid_state(self) -> RoomPIDState:
-        """Return (and create if needed) the shared RoomPIDState for this room."""
+        """Return (and create if needed) the shared RoomPIDState for this room.
+
+        The key is the logical room identifier (room_id or external temp sensor),
+        so mehrere Thermostate im gleichen Raum teilen sich denselben PID-Zustand.
+        """
         domain_data = self.hass.data.setdefault(DOMAIN, {})
         room_states = domain_data.setdefault("room_states", {})
         state = room_states.get(self._room_key)
