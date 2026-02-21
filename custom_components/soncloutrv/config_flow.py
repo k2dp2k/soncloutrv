@@ -223,8 +223,11 @@ class SonClouTRVOptionsFlow(config_entries.OptionsFlow):
     """Handle options flow for SonClouTRV."""
 
     def __init__(self, config_entry: config_entries.ConfigEntry) -> None:
-        """Store config entry for use in the options flow."""
-        self.config_entry = config_entry
+        """Initialize options flow."""
+        # self.config_entry is already set by base class or handled differently in newer HA versions
+        # OptionsFlow provides self.config_entry automatically; we do not need
+        # to assign it here.
+        pass
 
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
@@ -241,17 +244,6 @@ class SonClouTRVOptionsFlow(config_entries.OptionsFlow):
             base = {**self.config_entry.data, **self.config_entry.options}
             merged_data = {**base, **user_input}
             return self.async_create_entry(title="", data=merged_data)
-
-        # Build dynamic room_id options from defaults plus all existing room_ids
-        existing_rooms: set[str] = set()
-        for entry in self.hass.config_entries.async_entries(DOMAIN):
-            room_id = entry.data.get(CONF_ROOM_ID) or entry.options.get(CONF_ROOM_ID)
-            if isinstance(room_id, str) and room_id:
-                existing_rooms.add(room_id)
-        room_options = list(DEFAULT_ROOMS)
-        for room in sorted(existing_rooms):
-            if room not in room_options:
-                room_options.append(room)
 
         data_schema = vol.Schema(
             {
@@ -359,7 +351,7 @@ class SonClouTRVOptionsFlow(config_entries.OptionsFlow):
                     ),
                 ): selector.SelectSelector(
                     selector.SelectSelectorConfig(
-                        options=room_options,
+                        options=DEFAULT_ROOMS,
                         mode=selector.SelectSelectorMode.DROPDOWN,
                     )
                 ),
