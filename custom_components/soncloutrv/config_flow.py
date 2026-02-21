@@ -222,23 +222,6 @@ class SonClouTRVConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 class SonClouTRVOptionsFlow(config_entries.OptionsFlow):
     """Handle options flow for SonClouTRV."""
 
-    def __init__(self, config_entry: config_entries.ConfigEntry) -> None:
-        """Initialize options flow."""
-        self.config_entry = config_entry
-
-    def _build_room_options(self) -> list[str]:
-        """Build room_id options from defaults plus existing room_ids."""
-        existing: set[str] = set()
-        for entry in self.hass.config_entries.async_entries(DOMAIN):
-            room_id = entry.data.get(CONF_ROOM_ID) or entry.options.get(CONF_ROOM_ID)
-            if isinstance(room_id, str) and room_id:
-                existing.add(room_id)
-        options = list(DEFAULT_ROOMS)
-        for room in sorted(existing):
-            if room not in options:
-                options.append(room)
-        return options
-
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
     ) -> config_entries.FlowResult:
@@ -254,6 +237,17 @@ class SonClouTRVOptionsFlow(config_entries.OptionsFlow):
             base = {**self.config_entry.data, **self.config_entry.options}
             merged_data = {**base, **user_input}
             return self.async_create_entry(title="", data=merged_data)
+
+        # Build dynamic room_id options from defaults plus all existing room_ids
+        existing_rooms: set[str] = set()
+        for entry in self.hass.config_entries.async_entries(DOMAIN):
+            room_id = entry.data.get(CONF_ROOM_ID) or entry.options.get(CONF_ROOM_ID)
+            if isinstance(room_id, str) and room_id:
+                existing_rooms.add(room_id)
+        room_options = list(DEFAULT_ROOMS)
+        for room in sorted(existing_rooms):
+            if room not in room_options:
+                room_options.append(room)
 
         data_schema = vol.Schema(
             {
@@ -361,7 +355,7 @@ class SonClouTRVOptionsFlow(config_entries.OptionsFlow):
                     ),
                 ): selector.SelectSelector(
                     selector.SelectSelectorConfig(
-                        options=self._build_room_options(),
+                        options=room_options,
                         mode=selector.SelectSelectorMode.DROPDOWN,
                     )
                 ),
