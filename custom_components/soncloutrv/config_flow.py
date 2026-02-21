@@ -224,10 +224,20 @@ class SonClouTRVOptionsFlow(config_entries.OptionsFlow):
 
     def __init__(self, config_entry: config_entries.ConfigEntry) -> None:
         """Initialize options flow."""
-        # self.config_entry is already set by base class or handled differently in newer HA versions
-        # Just calling super if needed, but OptionsFlow usually doesn't need super().__init__ args
-        # However, to be safe and fix the error, we remove the assignment since it's a property without setter
-        pass
+        self.config_entry = config_entry
+
+    def _build_room_options(self) -> list[str]:
+        """Build room_id options from defaults plus existing room_ids."""
+        existing: set[str] = set()
+        for entry in self.hass.config_entries.async_entries(DOMAIN):
+            room_id = entry.data.get(CONF_ROOM_ID) or entry.options.get(CONF_ROOM_ID)
+            if isinstance(room_id, str) and room_id:
+                existing.add(room_id)
+        options = list(DEFAULT_ROOMS)
+        for room in sorted(existing):
+            if room not in options:
+                options.append(room)
+        return options
 
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
@@ -351,7 +361,7 @@ class SonClouTRVOptionsFlow(config_entries.OptionsFlow):
                     ),
                 ): selector.SelectSelector(
                     selector.SelectSelectorConfig(
-                        options=DEFAULT_ROOMS,
+                        options=self._build_room_options(),
                         mode=selector.SelectSelectorMode.DROPDOWN,
                     )
                 ),

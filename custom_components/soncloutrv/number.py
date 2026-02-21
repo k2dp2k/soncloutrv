@@ -16,10 +16,12 @@ from .const import (
     CONF_KI,
     CONF_KD,
     CONF_KA,
+    CONF_ROOM_POWER_SHARE,
     DEFAULT_KP,
     DEFAULT_KI,
     DEFAULT_KD,
     DEFAULT_KA,
+    DEFAULT_ROOM_POWER_SHARE,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -111,6 +113,19 @@ async def async_setup_entry(
             DEFAULT_KA,
             "Wettergeführte Vorsteuerung: Erhöht Heizleistung bei Kälte draußen (wenn Außensensor konfiguriert).",
         ),
+        SonClouTRVNumber(
+            hass,
+            config_entry,
+            CONF_ROOM_POWER_SHARE,
+            "Raum-Leistungsanteil",
+            0.1,
+            1.5,
+            0.05,
+            "",
+            "mdi:home-thermometer-outline",
+            DEFAULT_ROOM_POWER_SHARE,
+            "Gewichtung dieses Heizkreises im gemeinsamen Raum-Regler (1.0 = normal, 0.5 = halb so stark, >1.0 = stärker).",
+        ),
     ]
     
     async_add_entities(numbers, True)
@@ -193,6 +208,15 @@ class SonClouTRVNumber(NumberEntity):
                     elif self._setting_id == CONF_KA:
                         entity._ka = value
                         _LOGGER.info("%s: Feed-Forward Ka set to %.1f", entity.name, value)
+                    elif self._setting_id == CONF_ROOM_POWER_SHARE:
+                        try:
+                            share = float(value)
+                        except (TypeError, ValueError):
+                            share = DEFAULT_ROOM_POWER_SHARE
+                        # Clamp defensively
+                        share = max(0.0, min(2.0, share))
+                        entity._room_power_share = share
+                        _LOGGER.info("%s: Room power share set to %.2f", entity.name, share)
                     elif self._setting_id == "proportional_gain": # Legacy
                          entity._kp = value
                     break

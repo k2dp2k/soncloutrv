@@ -201,11 +201,20 @@ async def async_setup_entry(
     # Create at most one room sensor per room across all config entries.
     domain_data = hass.data.setdefault(DOMAIN, {})
     room_sensor_registry: set[str] = domain_data.setdefault("room_pid_sensors", set())
+    room_temp_registry: set[str] = domain_data.setdefault("room_temp_sensors", set())
 
     if room_key and room_key not in room_sensor_registry and climate_entity_id:
         sensors.append(SonClouTRVRoomPIDSensor(hass, config_entry, climate_entity_id, room_key))
         room_sensor_registry.add(room_key)
         _LOGGER.info("Added room-level PID debug sensor for room '%s'", room_key)
+
+    # Optional: Raum-Temperatursensor, der die konfigurierte externe
+    # Temperaturquelle für diesen Raum spiegelt, so dass verbundene Räume einen
+    # gemeinsamen Temperaturwert haben.
+    if room_key and room_key not in room_temp_registry and temp_sensor:
+        sensors.append(SonClouTRVRoomTemperatureSensor(hass, config_entry, temp_sensor, room_key))
+        room_temp_registry.add(room_key)
+        _LOGGER.info("Added room-level temperature sensor for room '%s'", room_key)
 
     # Always add native SonTRV valve position sensor (reads from climate entity)
     # Pass the found climate_entity_id to avoid looking it up again
@@ -672,6 +681,78 @@ class SonClouTRVWindowStateSensor(SensorEntity):
         self._attr_extra_state_attributes = extra
 
 
+class SonClouTRVRoomTemperatureSensor(SensorEntity):
+    """Room-level temperature sensor using the configured external sensor.
+
+    Mirrors the external temp sensor for a given room_key so that mehrere
+    Thermostate im gleichen Raum einen gemeinsamen Temperaturwert haben.
+    """
+
+    _attr_native_unit_of_measurement = UnitOfTemperature.CELSIUS
+    _attr_device_class = SensorDeviceClass.TEMPERATURE
+    _attr_state_class = SensorStateClass.MEASUREMENT
+
+    def __init__(
+        self,
+        hass: HomeAssistant,
+        config_entry: ConfigEntry,
+        source_entity_id: str,
+        room_key: str,
+    ) -> None:
+        self.hass = hass
+        self._config_entry = config_entry
+        self._source_entity_id = source_entity_id
+        self._room_key = room_key
+        self._remove_listener = None
+
+        self._attr_name = f"{config_entry.data[CONF_NAME]} Raumtemperatur"
+        self._attr_unique_id = f"{DOMAIN}_{config_entry.entry_id}_room_temp_{room_key}"
+        self._attr_icon = "mdi:home-thermometer"
+        self._attr_native_value = None
+
+        self._attr_device_info = DeviceInfo(
+            identifiers={(DOMAIN, config_entry.entry_id)},
+            name=f"SonTRV {config_entry.data[CONF_NAME]}",
+            manufacturer="k2dp2k",
+            model="Smart Thermostat Control",
+            sw_version="1.1.1",
+        )
+
+        self._attr_extra_state_attributes = {
+            "description": "Aggregierte Raumtemperatur (externer Sensor für diesen Raum)",
+            "room_key": room_key,
+            "source": source_entity_id,
+        }
+
+    async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
+        self._remove_listener = async_track_state_change_event(
+            self.hass,
+            [self._source_entity_id],
+            self._async_source_changed,
+        )
+        await self._async_update_from_source()
+
+    async def async_will_remove_from_hass(self) -> None:
+        if self._remove_listener:
+            self._remove_listener()
+
+    @callback
+    async def _async_source_changed(self, event) -> None:
+        await self._async_update_from_source()
+        self.async_write_ha_state()
+
+    async def _async_update_from_source(self) -> None:
+        source_state = self.hass.states.get(self._source_entity_id)
+        if not source_state or source_state.state in ("unavailable", "unknown"):
+            return
+        try:
+            temp = float(source_state.state)
+        except (TypeError, ValueError):
+            return
+        self._attr_native_value = temp
+
+
 class SonClouTRVRoomPIDSensor(SensorEntity):
     """Room-level PID debug sensor.
 
@@ -773,6 +854,7 @@ class SonClouTRVRoomPIDSensor(SensorEntity):
             integral_error = getattr(state, "integral_error", None)
             prev_error = getattr(state, "prev_error", None)
             last_calc_time = getattr(state, "last_calc_time", None)
+            avg_error = getattr(state, "avg_error", None)
 
             if last_output is not None:
                 self._attr_native_value = round(float(last_output), 1)
@@ -785,6 +867,8 @@ class SonClouTRVRoomPIDSensor(SensorEntity):
             if last_calc_time is not None:
                 # Represent as ISO string for easier debugging
                 attrs["room_last_calc_time"] = last_calc_time.isoformat()
+            if avg_error is not None:
+                attrs["room_avg_error"] = round(float(avg_error), 3)
 
             self._attr_extra_state_attributes = attrs
         except Exception as err:  # pragma: no cover - defensive

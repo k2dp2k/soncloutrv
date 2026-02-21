@@ -56,6 +56,10 @@
         "name": "PID: D-Verstärkung (Kd)",
         "state": "Derivativer Anteil: Dämpft Überschwingen bei Annäherung an das Ziel (Overshoot-Schutz)."
       },
+      "room_power_share": {
+        "name": "Raum-Leistungsanteil",
+        "state": "Gewichtung dieses Heizkreises im gemeinsamen Raum-Regler (1.0 = normal, 0.5 = halb so stark, >1.0 = stärker als andere Kreise)."
+      },
       "proportional_gain": {
         "name": "P-Verstärkung",
         "state": "Proportionale Verstärkung: Wie stark das Ventil pro °C Temperaturdifferenz öffnet. Höhere Werte = aggressiver. Standard: 20%/°C."

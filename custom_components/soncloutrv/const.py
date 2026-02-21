@@ -28,6 +28,8 @@ CONF_KA = "ka"  # Ambient/Outside Gain (Feed-Forward)
 # Room logging / analysis
 CONF_ROOM_LOGGING_ENABLED = "room_logging_enabled"
 CONF_ROOM_LOG_FILE = "room_log_file"
+# Per-thermostat weighting of shared room demand
+CONF_ROOM_POWER_SHARE = "room_power_share"
 # Legacy support
 CONF_PROPORTIONAL_GAIN = "proportional_gain"
 CONF_OUTSIDE_TEMP_SENSOR = "outside_temp_sensor"
@@ -100,6 +102,10 @@ DEFAULT_KA = 0.0    # Feed-Forward Gain (Standard aus, da optional)
 # Room logging defaults (for external analysis / ML tuning)
 DEFAULT_ROOM_LOGGING_ENABLED = False
 DEFAULT_ROOM_LOG_FILE = "sontrv_room_log.csv"
+# Default scaling factor for how much a given thermostat contributes to the
+# shared room heating demand (1.0 = normal, 0.5 = halb so stark, >1.0 =
+# stärker als andere Kreise im gleichen Raum).
+DEFAULT_ROOM_POWER_SHARE = 1.0
 # Window detection defaults
 DEFAULT_WINDOW_DROP_THRESHOLD = 0.8  # °C Sprung nach unten zwischen zwei Messungen
 DEFAULT_WINDOW_STABLE_BAND = 0.3     # °C Bandbreite für "stabil wieder"

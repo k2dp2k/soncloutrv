@@ -310,6 +310,11 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
         self._integral_error = 0.0
         self._prev_error = 0.0
         self._last_calc_time = None
+
+        # Per-thermostat weighting factor for how much this TRV contributes to
+        # the shared room heating demand. 1.0 = normal, 0.5 = halb so stark,
+        # >1.0 = stärker als andere Kreise im gleichen Raum.
+        self._room_power_share: float = 1.0
         
         # Window / sudden-drop detection state
         self._window_freeze_active = False
@@ -416,6 +421,18 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
                 self._ki = self._get_config_value(CONF_KI, self._config, DEFAULT_KI)
                 self._kd = self._get_config_value(CONF_KD, self._config, DEFAULT_KD)
                 self._ka = self._get_config_value(CONF_KA, self._config, DEFAULT_KA)
+
+                # Per-thermostat room power share (weighting of shared room demand)
+                try:
+                    raw_share = self._get_config_value("room_power_share", self._config, 1.0)
+                    share = float(raw_share)
+                except Exception:
+                    share = 1.0
+                if share < 0.0:
+                    share = 0.0
+                if share > 2.0:
+                    share = 2.0
+                self._room_power_share = share
 
                 # Migration: Wenn noch die alten, sehr aggressiven Standardwerte
                 # (Kp=20, Ki=0.01, Kd=500, Ka=0) aktiv sind, stelle einmalig
@@ -1625,8 +1642,15 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
         
         # Scale to max_valve_position (e.g. if max is 80%, we map 0-100% PID to 0-80% Valve)
         # OR: clamp strictly to max_valve_position?
-        # Usually: PID output 0-100% corresponds to valve 0-Max
-        final_desired = int((desired_percent / 100.0) * self._max_valve_position)
+        # Usually: PID output 0-100% corresponds to valve 0-Max. Additionally we
+        # apply the per-thermostat room_power_share so that mehrere Kreise im
+        # gleichen Raum unterschiedlich stark gewichtet werden können.
+        effective_share = max(0.0, min(2.0, getattr(self, "_room_power_share", 1.0)))
+        final_desired = int((desired_percent / 100.0) * self._max_valve_position * effective_share)
+        if final_desired > self._max_valve_position:
+            final_desired = self._max_valve_position
+        if final_desired < 0:
+            final_desired = 0
 
         # Soft-Phase nach Fensterende: Ausgang und Schrittweite begrenzen.
         now_soft = dt_util.now()

@@ -1,5 +1,11 @@
 {
   "entity": {
+    "number": {
+      "room_power_share": {
+        "name": "Room Power Share",
+        "state": "Weight of this heating circuit within the shared room controller (1.0 = normal, 0.5 = half, >1.0 = stronger than others)."
+      }
+    },
     "select": {
       "control_mode": {
         "name": "Control Mode",
