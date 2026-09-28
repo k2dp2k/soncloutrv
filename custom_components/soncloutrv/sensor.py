@@ -139,13 +139,22 @@ async def async_setup_entry(
     else:
         _LOGGER.warning("No temperature sensor found for %s", valve_entity)
         
-    # Valve position entity for statistics (opening degree as set on the TRV)
+    # Valve position entity for statistics (opening degree as set on the TRV):
+    # SONOFF TRVZB -> valve_opening_degree, Bosch BTH-RA -> pi_heating_demand
     valve_pos_entity = f"number.{base_entity_id}_valve_opening_degree"
     if device_id:
-        for entry in er.async_entries_for_device(entity_reg, device_id):
-            if entry.domain == "number" and entry.entity_id.endswith("_valve_opening_degree"):
-                valve_pos_entity = entry.entity_id
+        candidates = {
+            entry.entity_id
+            for entry in er.async_entries_for_device(entity_reg, device_id)
+            if entry.domain == "number"
+        }
+        for suffix in ("_valve_opening_degree", "_pi_heating_demand"):
+            match = next((e for e in sorted(candidates) if e.endswith(suffix)), None)
+            if match:
+                valve_pos_entity = match
                 break
+    elif hass.states.get(f"number.{base_entity_id}_pi_heating_demand") is not None:
+        valve_pos_entity = f"number.{base_entity_id}_pi_heating_demand"
 
     # Note: We no longer create separate SonTRV proxy sensors for TRV valve
     # opening/closing. The native SonTRV sensors (reading from the climate

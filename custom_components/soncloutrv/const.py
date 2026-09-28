@@ -4,7 +4,7 @@ DOMAIN = "soncloutrv"
 PLATFORMS = ["climate", "sensor", "number", "switch", "button", "select"]
 
 # Integration version (keep in sync with manifest.json)
-VERSION = "2.0.0"
+VERSION = "2.1.0"
 # Config entry schema version. 4 = predictive room controller (v2.0.0)
 CONFIG_VERSION = 4
 # Bump to reset accumulating statistics sensors once (v2.0.0: the old
@@ -71,6 +71,12 @@ VALVE_WRITE_DEADBAND = 3
 VALVE_REFRESH_INTERVAL = 6 * 3600
 # Re-send the external temperature at least every N seconds.
 EXT_TEMP_REFRESH_INTERVAL = 30 * 60
+# Bosch BTH-RA falls back to its own sensor after 30 min without update.
+EXT_TEMP_REFRESH_INTERVAL_BOSCH = 20 * 60
+
+# Supported TRV types (detected automatically from the Zigbee2MQTT entities)
+TRV_DRIVER_SONOFF = "sonoff_trvzb"  # valve_opening_degree / valve_closing_degree
+TRV_DRIVER_BOSCH = "bosch_bth_ra"  # pi_heating_demand / remote_temperature
 
 # Option keys whose change requires re-creating the entities. All other
 # options (gains, hysteresis, ...) are applied live without a reload.
