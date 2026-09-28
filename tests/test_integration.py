@@ -434,3 +434,64 @@ async def test_two_circuits_share_room_controller(hass: HomeAssistant, mqtt_mock
     assert await hass.config_entries.async_unload(entry2.entry_id)
     await hass.async_block_till_done()
     assert runtime.room_climates(hass, "Wohnzimmer") == [c1]
+
+
+async def test_bosch_bth_ra_driver(hass: HomeAssistant, mqtt_mock, freezer) -> None:
+    """Bosch Radiator Thermostat II: pi_heating_demand + remote_temperature."""
+    base = "handtuch_heizung_bad"
+    trv = FakeTRV(hass)
+    trv.setup_states()
+    hass.states.async_set(
+        f"climate.{base}", "off", {"hvac_modes": ["off", "heat", "auto"], "temperature": 5, "current_temperature": 23.8}
+    )
+    hass.states.async_set(f"number.{base}_pi_heating_demand", "0", {"min": 0, "max": 100})
+    hass.states.async_set(f"number.{base}_remote_temperature", "0", {"min": 0, "max": 35})
+    hass.states.async_set(f"sensor.{base}_local_temperature", "23.8", {"device_class": "temperature"})
+    hass.states.async_set(f"button.{base}_valve_adapt_process", "unknown")
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        title="trv_handtuch",
+        data={**V1_DATA, "name": "trv_handtuch", "valve_entity": f"climate.{base}"},
+        options={**V1_OPTIONS, "heating_type": "radiator", "valve_opening_step": "5", "window_sensors": []},
+        version=CONFIG_VERSION,
+        entry_id="01KXKZ53FC4NMFSC1YXJMXC9EN",
+        unique_id=f"climate.{base}",
+    )
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    trv.install()
+    pressed: list[str] = []
+
+    async def press(call: ServiceCall) -> None:
+        pressed.append(call.data["entity_id"])
+
+    hass.services.async_register("button", "press", press)
+
+    climate = runtime.climate_for_entry(hass, entry.entry_id)
+    assert climate.trv_driver == "bosch_bth_ra"
+    await _run_cycle(hass)
+    assert hass.states.get(f"climate.{base}").state == "heat"
+    demand = trv.last("number", "set_value", f"number.{base}_pi_heating_demand")
+    assert demand is not None and 0 < demand["value"] <= 100
+    # no SONOFF entities are written for this device
+    assert not [c for c in trv.calls if "valve_closing_degree" in str(c[2].get("entity_id")) and base in str(c[2].get("entity_id"))]
+    remote = trv.last("number", "set_value", f"number.{base}_remote_temperature")
+    assert remote is not None and remote["value"] == 20.5
+    assert hass.states.get("climate.trv_handtuch").attributes["trv_type"] == "bosch_bth_ra"
+
+    # remote temperature is re-sent before the 30 min fallback of the TRV
+    count = len([c for c in trv.calls if c[2].get("entity_id") == f"number.{base}_remote_temperature"])
+    for _ in range(5):  # 25 min, one control cycle every 5 min (radiator)
+        freezer.tick(timedelta(minutes=5))
+        async_fire_time_changed(hass)
+        await hass.async_block_till_done()
+    assert len([c for c in trv.calls if c[2].get("entity_id") == f"number.{base}_remote_temperature"]) > count
+
+    await climate.async_calibrate_valve()
+    assert pressed == [f"button.{base}_valve_adapt_process"]
+
+    await climate.async_set_hvac_mode(HVACMode.OFF)
+    await hass.async_block_till_done()
+    assert trv.last("number", "set_value", f"number.{base}_pi_heating_demand")["value"] == 0
+    assert hass.states.get(f"climate.{base}").state == "off"

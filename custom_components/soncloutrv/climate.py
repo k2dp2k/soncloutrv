@@ -120,6 +120,9 @@ from .const import (
     DEFAULT_WINDOW_STABLE_BAND,
     DOMAIN,
     EXT_TEMP_REFRESH_INTERVAL,
+    EXT_TEMP_REFRESH_INTERVAL_BOSCH,
+    TRV_DRIVER_BOSCH,
+    TRV_DRIVER_SONOFF,
     HEATING_TYPE_FLOOR,
     HEATING_TYPE_RADIATOR,
     VALVE_OPENING_STEPS,
@@ -269,6 +272,11 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
         self._valve_opening_entity = f"number.{base}_valve_opening_degree"
         self._valve_closing_entity = f"number.{base}_valve_closing_degree"
         self._calibration_entity = f"select.{base}_valve_calibration"
+        # Bosch Radiator Thermostat II (BTH-RA / RBSH-TRV0-ZB-EU)
+        self._pi_demand_entity = f"number.{base}_pi_heating_demand"
+        self._remote_temp_entity = f"number.{base}_remote_temperature"
+        self._adapt_button_entity = f"button.{base}_valve_adapt_process"
+        self._driver: str | None = None
         self._local_temp_entity: str | None = None  # resolved in async_added_to_hass
         self._mqtt_topic_base = f"zigbee2mqtt/{base}/set"
 
@@ -508,7 +516,7 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
                     self.hass, [self._outside_temp_sensor], self._async_outside_sensor_changed
                 )
             )
-        trv_entities = [self._valve_entity, self._valve_opening_entity]
+        trv_entities = [self._valve_entity, self._valve_opening_entity, self._pi_demand_entity]
         self._remove_listeners.append(
             async_track_state_change_event(self.hass, trv_entities, self._async_trv_changed)
         )
@@ -560,6 +568,31 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
         candidate = f"sensor.{self._device_id}_local_temperature"
         if self.hass.states.get(candidate) is not None:
             self._local_temp_entity = candidate
+
+    @property
+    def trv_driver(self) -> str:
+        """TRV type, detected from the Zigbee2MQTT entities of the device."""
+        if self._driver is None:
+            registry = er.async_get(self.hass)
+            if (
+                self.hass.states.get(self._valve_opening_entity) is not None
+                or registry.async_get(self._valve_opening_entity) is not None
+            ):
+                self._driver = TRV_DRIVER_SONOFF
+            elif (
+                self.hass.states.get(self._pi_demand_entity) is not None
+                or registry.async_get(self._pi_demand_entity) is not None
+            ):
+                self._driver = TRV_DRIVER_BOSCH
+            else:
+                # Unknown yet (Z2M still starting) - behave like a TRVZB but
+                # detect again next time.
+                return TRV_DRIVER_SONOFF
+        return self._driver
+
+    @property
+    def _valve_report_entity(self) -> str:
+        return self._pi_demand_entity if self.trv_driver == TRV_DRIVER_BOSCH else self._valve_opening_entity
 
     # ------------------------------------------------------------------
     # Scheduling
@@ -681,8 +714,9 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
         old_state: State | None = event.data.get("old_state")
         if new_state is None:
             return
-        if new_state.entity_id == self._valve_opening_entity:
-            self._reported_opening = _state_float(new_state)
+        if new_state.entity_id in (self._valve_opening_entity, self._pi_demand_entity):
+            if new_state.entity_id == self._valve_report_entity:
+                self._reported_opening = _state_float(new_state)
             return
         self._read_trv_attributes(new_state)
         was_unavailable = old_state is None or old_state.state in (STATE_UNAVAILABLE, STATE_UNKNOWN)
@@ -1024,7 +1058,7 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
     def _valve_reported_mismatch(self) -> bool:
         if self._last_written is None:
             return False
-        reported = _state_float(self.hass.states.get(self._valve_opening_entity))
+        reported = _state_float(self.hass.states.get(self._valve_report_entity))
         if reported is None:
             return False
         return abs(reported - self._last_written) >= 1
@@ -1069,9 +1103,13 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
             return
 
         closing = 100 - opening
+        if self.trv_driver == TRV_DRIVER_BOSCH:
+            # Bosch BTH-RA: the valve position is written directly as PI
+            # heating demand; the device keeps it (tested on RBSH-TRV0-ZB-EU).
+            ok = await self._async_set_number(self._pi_demand_entity, "pi_heating_demand", opening)
         # Close first when reducing, open first when increasing: the valve
         # never passes through a wider position than intended.
-        if last is not None and opening < last:
+        elif last is not None and opening < last:
             ok = await self._async_set_number(self._valve_closing_entity, "valve_closing_degree", closing)
             ok = await self._async_set_number(self._valve_opening_entity, "valve_opening_degree", opening) and ok
         else:
@@ -1114,13 +1152,22 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
             return
         value = round(float(temp), 1)
         now = _now_ts()
+        bosch = self.trv_driver == TRV_DRIVER_BOSCH
+        refresh = EXT_TEMP_REFRESH_INTERVAL_BOSCH if bosch else EXT_TEMP_REFRESH_INTERVAL
         due = (
             self._last_ext_sync_value is None
             or abs(value - self._last_ext_sync_value) >= 0.1
             or self._last_ext_sync_ts is None
-            or now - self._last_ext_sync_ts >= EXT_TEMP_REFRESH_INTERVAL
+            or now - self._last_ext_sync_ts >= refresh
         )
         if not due:
+            return
+        if bosch:
+            # remote_temperature: 0-35 °C, must be refreshed every < 30 min
+            clamped = max(0.0, min(35.0, value))
+            if await self._async_set_number(self._remote_temp_entity, "remote_temperature", clamped):
+                self._last_ext_sync_value = value
+                self._last_ext_sync_ts = now
             return
         select_state = self.hass.states.get(self._sensor_select_entity)
         if select_state is not None and select_state.state != "external":
@@ -1251,6 +1298,7 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
             "min_valve_update_interval": self._min_valve_update_interval,
             "prediction_horizon_min": round(self._horizon_s / 60),
             "room_key": self._room_key,
+            "trv_type": self.trv_driver,
             "room_demand": round(self._demand, 1),
             ATTR_PID_P: round(r.p, 1) if r else 0.0,
             ATTR_PID_I: round(r.i, 1) if r else round(ctrl.integral, 1) if ctrl else 0.0,
@@ -1365,7 +1413,14 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
 
     async def async_calibrate_valve(self) -> None:
         """Trigger the TRV valve calibration."""
-        if self.hass.states.get(self._calibration_entity) is not None:
+        if self.trv_driver == TRV_DRIVER_BOSCH:
+            if self.hass.states.get(self._adapt_button_entity) is not None:
+                await self._async_call("button", "press", {"entity_id": self._adapt_button_entity})
+            elif self.hass.services.has_service("mqtt", "publish"):
+                await self._async_call(
+                    "mqtt", "publish", {"topic": f"{self._mqtt_topic_base}/valve_adapt_process", "payload": "adapt"}
+                )
+        elif self.hass.states.get(self._calibration_entity) is not None:
             await self._async_call(
                 "select", "select_option", {"entity_id": self._calibration_entity, "option": "calibrate"}
             )
@@ -1430,6 +1485,7 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
         ctrl = self._controller
         return {
             "room_key": self._room_key,
+            "trv_type": self.trv_driver,
             "heating_type": self._heating_type,
             "control_mode": self._control_mode,
             "gains": {"kp": self._kp, "ki": self._ki, "kd": self._kd, "ka": self._ka},

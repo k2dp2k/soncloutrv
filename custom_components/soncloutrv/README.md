@@ -181,13 +181,15 @@ sinkt die Regelabweichung dort je nach Ventilkennlinie von 1,0–2,2 K RMS auf c
 Optional (Optionen). Enthält Temperatur, Quelle, Vorhersage, Steigung, P/I/D/FF, gelernte Vorsteuerung, Ventil, Fenster. Eine Datei im alten v1-Format wird als `.v1.bak` beiseitegelegt.
 
 ## 🤝 Unterstützte Hardware
-- **SONOFF TRVZB** (via Zigbee2MQTT oder ZHA)
-- Jeder Zigbee/MQTT-fähige TRV mit:
-  - `valve_opening_degree` Unterstützung
-  - `external_temperature_input` Unterstützung
 
-> Hinweis: Standard-Temperaturbereich bei der Einrichtung ist 6–25°C. Die Maximaltemperatur
-> kannst du in den Optionen pro Thermostat anpassen.
+Der Gerätetyp wird automatisch an den Zigbee2MQTT-Entitäten erkannt (Attribut `trv_type`):
+
+| Gerät | Ventilstellung | Raumtemperatur | Kalibrierung |
+|---|---|---|---|
+| **SONOFF TRVZB** | `valve_opening_degree` + komplementärer `valve_closing_degree` | `external_temperature_input` (+ `temperature_sensor_select: external`) | `valve_calibration` |
+| **Bosch Heizkörper-Thermostat II** (BTH-RA, RBSH-TRV0-ZB-EU) | `pi_heating_demand` (direkt, wird vom Gerät gehalten) | `remote_temperature`, alle 20 min (Gerät fällt sonst nach 30 min auf den eigenen Sensor zurück) | `valve_adapt_process` |
+
+Beide über Zigbee2MQTT.
 
 ## 📚 Dokumentation
 
@@ -231,6 +233,12 @@ Optional (Optionen). Enthält Temperatur, Quelle, Vorhersage, Steigung, P/I/D/FF
 - Der erste Durchlauf erfolgt 7 Tage nach Aktivierung
 
 ## 📄 Changelog
+
+### v2.1.0 (2026-09-28) – Bosch Heizkörper-Thermostat II
+
+- Unterstützung für Bosch BTH-RA / RBSH-TRV0-ZB-EU: Ventilstellung über `pi_heating_demand`, Raumtemperatur über `remote_temperature` (alle 20 min), Kalibrierung über Ventiladaption
+- Automatische Geräteerkennung (SONOFF TRVZB / Bosch), neues Attribut `trv_type`
+- Statistik-Sensoren nutzen beim Bosch `pi_heating_demand` als Quelle
 
 ### v2.0.0 (2026-09-28) – Vorausschauender Raumregler für ClouSet 🔮
 
