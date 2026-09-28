@@ -1,8 +1,21 @@
 calibrate_valve:
   name: Ventil kalibrieren
-  description: Führt eine manuelle Kalibrierung des TRV-Ventils durch. Das Ventil durchläuft einen vollständigen Öffnungs- und Schließzyklus zur Neukalibrierung.
+  description: Startet die Kalibrierung des TRV-Ventils (voller Hub). Danach wird die Stellung neu gesendet.
   target:
     entity:
       domain: climate
       integration: soncloutrv
-  fields: {}
+reset_learning:
+  name: Lernwerte zurücksetzen
+  description: Setzt den gelernten Wärmebedarf (I-Anteil) und die gelernte Wettervorsteuerung des Raums zurück.
+  target:
+    entity:
+      domain: climate
+      integration: soncloutrv
+exercise_valve:
+  name: Ventil durchbewegen
+  description: Bewegt das Ventil 5 min ganz auf und 5 min ganz zu (Verkalkungsschutz), danach normale Regelung.
+  target:
+    entity:
+      domain: climate
+      integration: soncloutrv

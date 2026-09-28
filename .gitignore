@@ -47,3 +47,8 @@ TESTING.md
 VALIDATION.md
 WARP.md
 CHANGELOG.md
+
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/

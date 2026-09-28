@@ -8,15 +8,19 @@
     },
     "select": {
       "control_mode": {
-        "name": "Control Mode",
-        "state": "Choose between binary (on/off) or proportional (gradual) valve control.",
-        "state_attributes": {
-          "options": {
-            "state": {
-              "binary": "Binary (On/Off)",
-              "proportional": "Proportional (Gradual)"
-            }
-          }
+        "name": "Control mode",
+        "state": {
+          "pid": "PID (predictive)",
+          "pwm": "Time proportional (PWM)",
+          "binary": "On/off",
+          "proportional": "Proportional"
+        }
+      },
+      "heating_type": {
+        "name": "Heating type",
+        "state": {
+          "floor": "Floor heating",
+          "radiator": "Radiator"
         }
       }
     }
@@ -85,12 +89,17 @@
         "description": "Configure your SONOFF TRVZB thermostat",
         "data": {
           "name": "Name",
-          "valve_entity": "SONOFF TRVZB Thermostat (climate)",
-          "temp_sensor": "Temperature Sensor",
-          "min_temp": "Minimum Temperature",
-          "max_temp": "Maximum Temperature",
-          "target_temp": "Target Temperature",
-          "valve_opening_step": "Maximum Valve Opening (Step)"
+          "valve_entity": "SONOFF TRVZB thermostat (climate)",
+          "temp_sensor": "Room temperature sensor",
+          "min_temp": "Minimum temperature",
+          "max_temp": "Maximum temperature",
+          "target_temp": "Target temperature",
+          "valve_opening_step": "Maximum valve opening (step)",
+          "room_id": "Room (same room shares one controller)",
+          "heating_type": "Heating type",
+          "outside_temp_sensor": "Outside temperature (sensor or weather)",
+          "window_sensors": "Window/door sensors",
+          "window_sensor_scope": "Effect of open windows"
         }
       }
     },
@@ -108,10 +117,24 @@
         "title": "SonClouTRV Options",
         "description": "Adjust the settings",
         "data": {
-          "min_temp": "Minimum Temperature",
-          "max_temp": "Maximum Temperature",
-          "target_temp": "Target Temperature",
-          "valve_opening_step": "Maximum Valve Opening (Step)"
+          "heating_type": "Heating type",
+          "control_mode": "Control mode",
+          "temp_sensor": "Room temperature sensor",
+          "outside_temp_sensor": "Outside temperature (sensor or weather)",
+          "room_id": "Room (same room shares one controller)",
+          "window_sensors": "Window/door sensors",
+          "window_sensor_scope": "Effect of open windows",
+          "window_drop_threshold": "Window detection: temperature drop (K)",
+          "window_stable_band": "Window detection: stability band (K)",
+          "window_max_freeze": "Window: maximum pause (s)",
+          "min_temp": "Minimum temperature",
+          "max_temp": "Maximum temperature",
+          "target_temp": "Target temperature",
+          "valve_opening_step": "Maximum valve opening (step)",
+          "sensor_timeout": "Sensor failure after (min)",
+          "adaptive_feed_forward": "Learn weather feed-forward automatically",
+          "room_logging_enabled": "CSV logging",
+          "room_log_file": "CSV file"
         }
       }
     }

@@ -80,15 +80,18 @@
     "select": {
       "control_mode": {
         "name": "Steuermodus",
-        "state": "Wählen Sie zwischen binärer (An/Aus) oder proportionaler (stufenloser) Ventilsteuerung.",
-        "state_attributes": {
-          "options": {
-            "state": {
-              "binary": "Binär (An/Aus)",
-              "proportional": "Proportional (Legacy)",
-              "pid": "PID (Adaptiv & Lernend)"
-            }
-          }
+        "state": {
+          "pid": "PID (vorausschauend)",
+          "pwm": "Takt (PWM)",
+          "binary": "Binär",
+          "proportional": "Proportional"
+        }
+      },
+      "heating_type": {
+        "name": "Heizungstyp",
+        "state": {
+          "floor": "Flächenheizung",
+          "radiator": "Heizkörper"
         }
       }
     }
@@ -179,11 +182,16 @@
         "data": {
           "name": "Name",
           "valve_entity": "SONOFF TRVZB Thermostat (climate)",
-          "temp_sensor": "Temperatursensor",
+          "temp_sensor": "Raumtemperatursensor",
           "min_temp": "Minimale Temperatur",
           "max_temp": "Maximale Temperatur",
           "target_temp": "Zieltemperatur",
-          "valve_opening_step": "Maximale Ventilöffnung (Stufe)"
+          "valve_opening_step": "Maximale Ventilöffnung (Stufe)",
+          "room_id": "Raum (gleiche Räume teilen einen Regler)",
+          "heating_type": "Heizungstyp",
+          "outside_temp_sensor": "Außentemperatur (Sensor oder Wetter)",
+          "window_sensors": "Fenster-/Türsensoren",
+          "window_sensor_scope": "Wirkung offener Fenster"
         }
       }
     },
@@ -201,10 +209,24 @@
         "title": "SonTRV Flächenheizung Optionen",
         "description": "Passen Sie die Einstellungen an",
         "data": {
+          "heating_type": "Heizungstyp",
+          "control_mode": "Steuermodus",
+          "temp_sensor": "Raumtemperatursensor",
+          "outside_temp_sensor": "Außentemperatur (Sensor oder Wetter)",
+          "room_id": "Raum (gleiche Räume teilen einen Regler)",
+          "window_sensors": "Fenster-/Türsensoren",
+          "window_sensor_scope": "Wirkung offener Fenster",
+          "window_drop_threshold": "Fenstererkennung: Temperatursturz (K)",
+          "window_stable_band": "Fenstererkennung: Stabilitätsband (K)",
+          "window_max_freeze": "Fenster: maximale Pause (s)",
           "min_temp": "Minimale Temperatur",
           "max_temp": "Maximale Temperatur",
           "target_temp": "Zieltemperatur",
-          "valve_opening_step": "Maximale Ventilöffnung (Stufe)"
+          "valve_opening_step": "Maximale Ventilöffnung (Stufe)",
+          "sensor_timeout": "Sensor-Ausfall nach (min)",
+          "adaptive_feed_forward": "Wettervorsteuerung automatisch lernen",
+          "room_logging_enabled": "CSV-Logging",
+          "room_log_file": "CSV-Datei"
         }
       }
     }

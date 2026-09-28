@@ -6,23 +6,32 @@
 
 ## Projektbeschreibung
 
-SonTRV ist eine Home Assistant Custom Integration **speziell für Flächenheizungen (Fußbodenheizung)** mit SONOFF TRVZB Thermostaten. Die Integration berücksichtigt die Trägheit von Flächenheizungssystemen und bietet erweiterte Funktionen wie externe Temperatursensoren, 5-Stufen-Ventilsteuerung, intelligente Hysterese und automatischen Verkalkungsschutz.
+SonTRV ist eine Home Assistant Custom Integration für **Einzelraum-Flächenheizungen mit SONOFF TRVZB**,
+entwickelt für **ClouSet-Anlagen** (Multi SK / Multi HK): jeder Raum hat einen eigenen Heizkreis im
+Estrich, das Ventil sitzt im Vorlauf, der maximale Durchfluss ist per Voreinstellung fest vorgegeben
+und alle Kreise hängen am gleichen Vorlauf. Das TRVZB ersetzt den selbsttätigen P-Regler-Kopf; SonTRV
+übernimmt die Regelung mit einem externen Raumsensor.
+
+Warum eine eigene Regelung? Die Kombination aus Estrich-Speichermasse (Totzeit 1–2 h), stark
+nichtlinearem Ventil (Durchfluss steigt am Anfang des Hubs fast vollständig an) und gegenseitiger
+Beeinflussung der Räume lässt einen gewöhnlichen PID-Regler pendeln. Ab v2.0.0 arbeitet deshalb ein
+**vorausschauender, lernender Raumregler** (siehe [Regelung](#-regelung-ab-v200)).
 
 ## 🌟 Features
 
-- ✅ **Externe Temperatursensoren** - Präzise Raumtemperaturmessung statt TRV-interner Sensoren
-- 🎯 **Intelligente Hysterese** - Verhindert ständiges Schalten (konfigurierbar: 0,1-2,0°C)
-- 🧠 **PID-Steuerung (Adaptiv)** - Lernt den Wärmebedarf, verhindert Überschwingen und hält die Temperatur präzise
-- ⏱️ **Trägheitssteuerung** - Speziell für träge Flächenheizungssysteme optimiert (1-60 Min einstellbar)
-- 🔄 **Umschaltbarer Steuermodus** - Binär (An/Aus), Proportional (Legacy) oder PID (Adaptiv)
-- 📊 **5 Ventilöffnungsstufen** - Präzise Kontrolle: 0%, 20%, 40%, 60%, 80%, 100%
-- 🛡️ **Verkalkungsschutz** - Automatisches Ventil-Durchbewegen alle 7 Tage
-- 📈 **Umfangreiche Sensoren** - Ventilposition, Batterie, Temperaturdifferenz, Durchschnitt
-- 🚪 **Intelligente Fenster-Erkennung** - Kombination aus Temperatur-Drop und optionalen Fenster-/Türsensoren (lokal oder global)
-- 🧊 **Fenster-Freeze & sanfter Wiederanlauf** - Heizung pausiert bei offenem Fenster und fährt danach gedrosselt wieder an
-- 📑 **Raum-CSV-Logging** - Loggt PID-Interna, Fensterzustand und Soft-Phase für detaillierte Analysen
-- 🔧 **Live-Konfiguration** - Alle Parameter über die UI anpassbar
-- 🇩🇪 **Vollständige deutsche Übersetzung**
+- 🔮 **Vorausschauende Regelung** – schließt das Ventil, *bevor* der Estrich den Raum überheizt
+- 🧠 **Lernt den Wärmebedarf** pro Raum (I-Anteil bleibt erhalten, wird über Neustarts gespeichert)
+- 🌤️ **Gelernte Wettervorsteuerung** – Außentemperatur wirkt sofort, ohne manuelles Tuning
+- 🏠 **Gemeinsamer Regler pro Raum** – mehrere Kreise im selben Raum (z. B. Wohnen + Küche) regeln zusammen
+- 🔥 **Heizungstyp** Flächenheizung oder Heizkörper mit passenden Parametern
+- 🎛️ **Steuermodi** PID (Standard), Takt/PWM, Binär, Proportional – alle live umschaltbar
+- 🔁 **Robuste Ventilansteuerung** – Öffnungs- und Schließgrad komplementär, Soll/Ist-Abgleich mit dem TRV, Wiederholung bei Funkfehlern, wenige Schreibvorgänge (Batterie)
+- 🛟 **Sensor-Ausfall-Fallback** – TRV-Sensor mit gelerntem Offset, sonst gelernter Grundbedarf
+- 🚨 **Erkennung fehlender Vorlaufwärme** (Ventil offen, Raum wird nicht wärmer) – stoppt das Hochlaufen des I-Anteils
+- 🚪 **Fenster** per Sensor (Raum oder global) oder Temperatursturz; Lernwerte bleiben erhalten, sanfter Wiederanlauf
+- 🛡️ **Verkalkungsschutz** jeden Sonntag gegen 3 Uhr (Kreise zeitversetzt), auch im Sommer
+- 📑 **CSV-Logging** aller Regler-Interna für Analysen, 🧾 **Diagnose-Download**
+- 🇩🇪 Deutsche und englische Übersetzung
 
 ## Projektstruktur
 
@@ -111,100 +120,65 @@ Bei der Einrichtung kannst du jedem SonTRV einen einfachen Raum zuordnen:
 - `sensor.[name]_pid_i` - PID Integral-Anteil (Lernwert)
 - `sensor.[name]_pid_d` - PID Derivative-Anteil (Dämpfung)
 
-### Einstellungen (Live konfigurierbar)
-- `select.[name]_steuermodus` - Binär, Proportional oder **PID** (Standard: **PID**)
-- `number.[name]_hysterese` - 0,1-2,0°C (Standard: 0,2°C)
-- `number.[name]_tragheit_min_update_intervall` - 1-60 Min (Standard: 10 Min)
-- `number.[name]_pid_p_gain_kp` - PID P-Verstärkung
-- `number.[name]_pid_i_gain_ki` - PID I-Verstärkung (Lernfaktor)
-- `number.[name]_pid_d_gain_kd` - PID D-Verstärkung (Dämpfung)
+### Einstellungen (live, ohne Neuladen)
+- `select.[name]_heizungstyp` – Flächenheizung / Heizkörper (setzt die Regelparameter auf das Profil)
+- `select.[name]_steuermodus` – PID (Standard), PWM, Binär, Proportional
+- `number.[name]_hysterese` – Schaltabstand Binär-Modus, Übertemperatur-Abschaltung im PID-Modus
+- `number.[name]_tragheit_min_update_intervall` – Regelintervall (Standard 15 min Fußboden / 5 min Heizkörper)
+- `number.[name]_vorausschau_totzeit` – Vorausschau (Standard 45 min Fußboden / 12 min Heizkörper)
+- `number.[name]_pid_p_gain_kp`, `..._pid_i_gain_ki_lernen`, `..._pid_d_gain_kd_dampfung`
+- `number.[name]_feed_forward_aussen_gain_ka` – 0 = automatisch lernen
+- `number.[name]_raum_leistungsanteil` – Gewichtung mehrerer Kreise in einem Raum
+- `number.[name]_ventil_offnungsbeginn` – Öffnung, ab der Wasser fließt
 
-### Verkalkungsschutz
-- `switch.[name]_verkalkungsschutz` - Auto-Durchbewegen alle 7 Tage
-- `button.[name]_ventil_durchbewegen` - Manuelles Durchbewegen
+### Verkalkungsschutz & Wartung
+- `switch.[name]_verkalkungsschutz` – Sonntag 03:00–03:50 (je Kreis versetzt)
+- `button.[name]_ventil_durchbewegen` – sofort (5 min auf, 5 min zu)
+- `button.[name]_lernwerte_zurucksetzen` – gelernten Wärmebedarf des Raums verwerfen
 
-## 🔧 Konfiguration
+## 🔧 Regelung ab v2.0.0
 
-### Steuermodus
+Pro Raum und Heizungstyp gibt es einen gemeinsamen Regler:
 
-Die Integration unterstützt drei Steuermodi, die über `select.[name]_steuermodus` umgeschaltet werden können:
+1. **Trend**: lineare Regression über 60 min (Heizkörper 20 min) liefert geglättete Temperatur und Steigung in K/h – robust gegen 0,1-K-Stufen der Sensoren.
+2. **P-Anteil auf die Vorhersage**: `Kp × (Soll − (Ist + Steigung × Vorausschau))`. Steigt die Temperatur noch, nimmt der Regler Leistung weg, bevor der Estrich überschwingt.
+3. **I-Anteil = gelernter Grundbedarf**: wird nicht mehr in Sollwertnähe abgebaut oder beim Vorzeichenwechsel gelöscht (das war die Ursache des Pendelns in v1.x). Lernt nur nahe am Soll oder wenn der Raum „feststeckt“, mit Anti-Windup und gespeichert über Neustarts.
+4. **Wettervorsteuerung**: in ruhigen Phasen lernt der Regler „% Bedarf pro Kelvin innen/außen“; Außentemperaturänderungen wirken sofort, der I-Anteil korrigiert nur den Rest.
+5. **Ausgang**: Bedarf 0–100 % wird auf 0 … maximale Ventilöffnung (Stufe) abgebildet. Geschrieben wird nur bei ≥ 3 %-Punkten Änderung, beim Öffnen/Schließen, alle 6 h zur Sicherheit oder wenn das TRV einen anderen Wert meldet.
 
-**PID (Adaptiv & Lernend)** - ✅ **Standard**
-- **Intelligente Regelung**: Kombiniert P (Reaktion), I (Lernen) und D (Vorausschau)
-- **Adaptiv**: Lernt über den I-Anteil (Integral), wie viel Energie konstant benötigt wird, um die Temperatur zu halten
-- **Überschwingschutz**: Der D-Anteil (Derivative) erkennt schnelle Temperaturanstiege und bremst das Heizen rechtzeitig ab
-- **Sanfte Änderungen**: Spezieller Schutz gegen Sprünge bei Zielwertänderung ("Derivative Kick Protection")
-- **Optimal für alle Heizungstypen**, besonders Flächenheizung
+| Profil | Kp [%/K] | Nachstellzeit | Vorausschau | Intervall |
+|---|---|---|---|---|
+| Flächenheizung | 25 | 4 h | 45 min | 15 min |
+| Heizkörper | 25 | 40 min | 12 min | 5 min |
 
-**Proportional (stufenlos)** - *Legacy*
-- Ventil öffnet graduell basierend auf Temperaturdifferenz
-- Bei kleiner Differenz: geringe Öffnung
-- Bei großer Differenz (>3°C): maximale Öffnung (gewählte Stufe)
-- **Einfach und robust**, aber ohne Lernfunktion
+Die Werte wurden mit einem Raummodell (Estrich + Raum, Totzeit, nichtlineares Ventil, schwankender
+Vorlaufdruck, Sonne, Tagesgang außen) ermittelt: `python3 tests/sim_clouset.py`. Gegenüber v1.3.3
+sinkt die Regelabweichung dort je nach Ventilkennlinie von 1,0–2,2 K RMS auf ca. 0,3 K RMS bei
+4–5× weniger Ventilbewegungen.
 
-**Binär (An/Aus):**
-- Ventil wird entweder voll geöffnet (auf gewählte Stufe) oder komplett geschlossen
-- Einfache Steuerung, gut für sehr träge Systeme oder Stellantriebe ohne Zwischenpositionen
+### Steuermodi
+- **PID** (Standard) – stetig, vorausschauend, lernend
+- **PWM/Takt** – Ventil im Zeitraster ganz auf (auf die Stufe) oder zu; linear unabhängig von der Ventilkennlinie, dafür mehr Motorbewegungen
+- **Binär** – Zweipunkt mit Hysterese auf die vorhergesagte Temperatur
+- **Proportional** – Legacy (Öffnung proportional zur Abweichung, 3 K = voll)
 
-**Beispiel PID-Modus:**
-Der PID-Regler berechnet die Ventilöffnung als Summe aus:
-1. **P-Anteil**: Temperatur ist zu niedrig -> Öffnen
-2. **I-Anteil**: "Es ist dauerhaft 0,5°C zu kalt" -> Öffnung langsam erhöhen und diesen Wert *merken*
-3. **D-Anteil**: "Temperatur steigt sehr schnell" -> Ventil schließen, bevor Ziel erreicht ist (Bremse)
+### Preset-Modi (maximale Ventilöffnung)
 
-### Preset-Modi (Ventilöffnungsstufen)
+| Preset | Öffnung |
+|--------|---------|
+| **\\*** | 0 % (aus) |
+| **1** | 20 % |
+| **2** | 40 % (Standard, bei ClouSet sättigt der Durchfluss meist darunter) |
+| **3** | 60 % |
+| **4** | 80 % |
+| **5** | 100 % |
 
-| Preset | Öffnung | Verwendung |
-|--------|---------|------------|
-| **\\*** | 0% | Ventil geschlossen / Aus |
-| **1** | 20% | Minimale Heizleistung |
-| **2** | 40% | Niedrige Heizleistung |
-| **3** | 60% | Mittlere Heizleistung |
-| **4** | 80% | Standard für Fußbodenheizung |
-| **5** | 100% | Maximale Heizleistung |
-
-### Fenster-/Türsensoren & Fenster-Freeze
-
-- Optional können pro Thermostat ein oder mehrere `binary_sensor`-Entitäten mit `device_class` `window`/`door` hinterlegt werden.
-- Zusätzlich gibt es einen **Scope**:
-  - **Nur dieses Thermostat (local):** Nur der gewählte SonTRV reagiert auf die Sensoren.
-  - **Alle SonTRV-Thermostate (all):** Ein offenes Fenster pausiert alle SonTRV-Regler in der Wohnung.
-- Bei offenem Fenster:
-  - Wird das Ventil sofort geschlossen.
-  - Die PID-Regelung (inkl. Lernen) wird eingefroren.
-- Nach dem Schließen aller relevanten Fenster:
-  - Wird der Integrator auf einen Bruchteil des Vor-Fenster-Werts reduziert (sanfter Neustart).
-  - Eine **Soft-Phase** (Standard: 1 Stunde) begrenzt Ventilsprung und maximale Öffnung, um ein "Vollgas" zu vermeiden.
-  - Danach regelt der PID wieder frei.
-- Wenn **keine Sensoren** konfiguriert sind, bleibt die **Temperatur-basierte Fenstererkennung** als Fallback aktiv (plötzlicher Drop über Schwellwert).
+### Fenster
+- Sensoren pro Thermostat; Wirkung „nur dieser Raum“ oder „alle SonTRV“. Ohne Sensoren: Temperatursturz-Erkennung.
+- Offen: Ventil zu, Lernen pausiert. Zu: Regelung läuft mit erhaltenen Lernwerten weiter, 1 h lang max. +10 %-Punkte gegenüber vor dem Fenster (die Luft kühlt schnell, der Estrich kaum).
 
 ### Raum-CSV-Logging
-
-- Optionales Logging in eine CSV-Datei (Standard: `sontrv_room_log.csv` im Home-Assistant-Konfigurationsverzeichnis).
-- Kann pro Thermostat in den Optionen aktiviert/deaktiviert werden.
-- Loggt u.a.:
-  - Raumtemperatur, Sollwert, Fehler
-  - PID-Output (room_demand_percent) und tatsächliche Ventilöffnung
-  - PID-Parameter und -Anteile (`kp`, `ki`, `pid_p`, `pid_i`, `pid_d`, `pid_ff`, `pid_integral_error`)
-  - Außentemperatur und verwendeter Außensensor
-  - Fensterzustand (`window_freeze_active`, `window_sensor_open`, `window_sensor_scope`, `window_sensors`)
-  - Status der soften Post-Fenster-Phase (`post_window_soft_active`)
-- Die CSV eignet sich für detaillierte Analyse, Visualisierung und zukünftiges ML-basiertes Tuning.
-
-### Empfohlene Einstellungen
-
-**Fußbodenheizung:**
-- Steuermodus: **PID**
-- Hysterese: 0,2-0,7°C
-- Trägheit: 15-20 Minuten
-- Max. Stufe: 2 (40%)
-- PID: Standardwerte (Kp=20, Ki=0.01, Kd=500)
-
-**Heizkörper:**
-- Steuermodus: **PID** oder Proportional
-- Hysterese: 0,3-0,5°C
-- Trägheit: 5-10 Minuten
-- Max. Stufe: 5 (100%)
+Optional (Optionen). Enthält Temperatur, Quelle, Vorhersage, Steigung, P/I/D/FF, gelernte Vorsteuerung, Ventil, Fenster. Eine Datei im alten v1-Format wird als `.v1.bak` beiseitegelegt.
 
 ## 🤝 Unterstützte Hardware
 - **SONOFF TRVZB** (via Zigbee2MQTT oder ZHA)
@@ -226,28 +200,16 @@ Der PID-Regler berechnet die Ventilöffnung als Summe aus:
 
 ## 🔧 Services
 
-### `soncloutrv.calibrate_valve`
+- `soncloutrv.calibrate_valve` – TRV-Kalibrierung, danach wird die Stellung neu gesendet
+- `soncloutrv.reset_learning` – gelernten Bedarf des Raums zurücksetzen
+- `soncloutrv.exercise_valve` – Ventil durchbewegen
 
-Führt eine manuelle Ventil-Kalibrierung durch.
+## ⚡ Start & Ausfallsicherheit
 
-```yaml
-service: soncloutrv.calibrate_valve
-target:
-  entity_id: climate.sontrv_bad
-```
-
-## ⚡ Startup-Verhalten
-
-**Die Integration wartet automatisch auf Zigbee2MQTT/MQTT:**
-- Bis zu **30 Sekunden** Wartezeit auf TRV-Verfügbarkeit
-- Liest beim Start alle Sensorwerte (Batterie, Temperatur, Ventilposition)
-- Berechnet initiale Ventilöffnung basierend auf Temperaturdifferenz
-- Synchronisiert externe Temperatur und Sollwert sofort
-
-**Das bedeutet:**
-- Keine fehlenden Sensorwerte nach Neustart
-- Ventil startet nicht mehr mit 100%
-- Im Proportional-Modus: Direkt der richtige Wert!
+- Der Start blockiert Home Assistant nicht mehr (v1 wartete bis zu 30 s pro Thermostat). Die Regelung startet nach dem HA-Start, zeitversetzt pro Kreis.
+- Ist das TRV nicht erreichbar, wird nichts geschrieben; sobald es wieder da ist, wird alles neu synchronisiert.
+- Das TRV wird im Heizbetrieb aktiv auf `heat` gestellt (v1 ließ es nach „Aus“ dauerhaft aus).
+- Die externe Temperatur wird bei Änderung und spätestens alle 30 min gesendet.
 
 ## 🐛 Troubleshooting
 
@@ -269,6 +231,29 @@ target:
 - Der erste Durchlauf erfolgt 7 Tage nach Aktivierung
 
 ## 📄 Changelog
+
+### v2.0.0 (2026-09-28) – Vorausschauender Raumregler für ClouSet 🔮
+
+**Regelung**
+- Neuer Regelkern (`controller.py`): Trend + Vorhersage über die Totzeit, I-Anteil ohne Abbau am Sollwert, Anti-Windup, gelernte Wettervorsteuerung, Erkennung fehlender Vorlaufwärme
+- Heizungstyp Flächenheizung/Heizkörper mit getesteten Profilen; getrennte Regler pro Raum und Typ
+- Steuermodus-Auswahl wirkt jetzt wirklich (war in v1 ohne Funktion), neu: PWM
+- Lernwerte werden über Neustarts/Neuladen gespeichert
+
+**Fehlerbehebungen**
+- TRV wird nach „Aus“ wieder auf `heat` gestellt (sonst blieb das Ventil im Winter zu)
+- Statistik-Sensoren lasen eine Motorspannung statt der Ventilöffnung (1500 kWh „Heizenergie“) – korrigiert und einmalig zurückgesetzt
+- Verkalkungsschutz lief praktisch nie (Zeitprüfung) und brach mit Fehler ab – neu geplant, funktioniert auch bei ausgeschalteter Heizung
+- Jede Zahl-Änderung lud die ganze Integration neu – jetzt live
+- „Trägheit“ und Optionen wie Min/Max-Temperatur wurden von der Regelung ignoriert
+- Setup blockierte HA bis zu 30 s pro Thermostat
+- Raum-Sensoren verschwanden nach dem Neuladen einer Integration
+- Config-Entry-Migration schrieb die Version unzulässig direkt und setzte Tuning zurück
+
+**Update-Sicherheit**
+- Migration auf Config-Version 4: Entity-IDs bleiben, eigenes Tuning bleibt (D-Anteil wird in die neue Einheit umgerechnet), unveränderte Alt-Standardwerte werden durch das Profil ersetzt
+- 29 automatische Tests (inkl. Migration realer v1.3.3-Optionen), Simulation `tests/sim_clouset.py`
+
 
 ### v1.3.0 (2025-12-17) - PID Evolution & Architecture 🧠
 
