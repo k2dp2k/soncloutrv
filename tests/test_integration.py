@@ -495,3 +495,34 @@ async def test_bosch_bth_ra_driver(hass: HomeAssistant, mqtt_mock, freezer) -> N
     await hass.async_block_till_done()
     assert trv.last("number", "set_value", f"number.{base}_pi_heating_demand")["value"] == 0
     assert hass.states.get(f"climate.{base}").state == "off"
+
+
+async def test_room_setpoint_is_shared(hass: HomeAssistant, mqtt_mock) -> None:
+    """Wohnen + Küche are one room: one set-point for both circuits."""
+    await _setup(hass)
+    base2 = "heizung_kuche_fussboden"
+    hass.states.async_set(f"climate.{base2}", "off", {"hvac_modes": ["off", "heat"], "temperature": 7})
+    hass.states.async_set(f"number.{base2}_valve_opening_degree", "0")
+    hass.states.async_set(f"number.{base2}_valve_closing_degree", "100")
+    entry2 = MockConfigEntry(
+        domain=DOMAIN,
+        title="trv_kuche",
+        data={**V1_DATA, "name": "trv_kuche", "valve_entity": f"climate.{base2}", "target_temp": 19.0},
+        options={**V1_OPTIONS, "target_temp": 19.0},
+        version=CONFIG_VERSION,
+        entry_id="01KXKZ7SKVSYSTS33R44NB22P1",
+        unique_id=f"climate.{base2}",
+    )
+    entry2.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry2.entry_id)
+    await hass.async_block_till_done()
+    wohn = runtime.climate_for_entry(hass, ENTRY_ID)
+    kuche = runtime.climate_for_entry(hass, entry2.entry_id)
+    # joining circuit adopts the room set-point
+    assert kuche.target_temperature == wohn.target_temperature == 21.5
+    await hass.services.async_call(
+        "climate", "set_temperature", {"entity_id": "climate.trv_kuche", "temperature": 22.0}, blocking=True
+    )
+    await hass.async_block_till_done()
+    assert hass.states.get("climate.trv_wohn").attributes["temperature"] == 22.0
+    assert hass.states.get("climate.trv_kuche").attributes["temperature"] == 22.0

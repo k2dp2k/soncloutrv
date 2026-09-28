@@ -239,6 +239,7 @@ Beide über Zigbee2MQTT.
 - Unterstützung für Bosch BTH-RA / RBSH-TRV0-ZB-EU: Ventilstellung über `pi_heating_demand`, Raumtemperatur über `remote_temperature` (alle 20 min), Kalibrierung über Ventiladaption
 - Automatische Geräteerkennung (SONOFF TRVZB / Bosch), neues Attribut `trv_type`
 - Statistik-Sensoren nutzen beim Bosch `pi_heating_demand` als Quelle
+- **Ein Sollwert pro Raum**: Wird die Temperatur an einem Thermostat eines Raums gestellt, übernehmen alle Kreise dieses Raums den Wert (z. B. Wohnen + Küche, Bad-Fußboden + Handtuchheizkörper). Ein neu hinzukommender Kreis übernimmt den Raum-Sollwert.
 
 ### v2.0.0 (2026-09-28) – Vorausschauender Raumregler für ClouSet 🔮
 

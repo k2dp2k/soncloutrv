@@ -499,6 +499,22 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
             if offset is not None and abs(offset) < 5:
                 self._local_offset = offset
 
+        # One set-point per room: all circuits of a room follow the room
+        # thermostat. A circuit joining a room adopts the room's set-point.
+        for other in runtime.room_climates(self.hass, self._room_key):
+            if other is not self and other._attr_target_temperature is not None:
+                if other._attr_target_temperature != self._attr_target_temperature:
+                    _LOGGER.info(
+                        "%s: adopting room set-point %.1f °C of %s",
+                        self.name,
+                        other._attr_target_temperature,
+                        other.name,
+                    )
+                    self._attr_target_temperature = min(
+                        self._attr_max_temp, max(self._attr_min_temp, other._attr_target_temperature)
+                    )
+                break
+
         # Prime the trend with the current values so the first run has data.
         self._ingest_room_temperature(self.hass.states.get(self._temp_sensor))
         if self._outside_temp_sensor:
@@ -1348,9 +1364,25 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
         temperature = _to_float(kwargs.get(ATTR_TEMPERATURE))
         if temperature is None:
             return
-        self._attr_target_temperature = min(self._attr_max_temp, max(self._attr_min_temp, temperature))
+        target = min(self._attr_max_temp, max(self._attr_min_temp, temperature))
+        self._attr_target_temperature = target
         self.async_write_ha_state()
+        # The set-point belongs to the room: every circuit in the room follows.
+        for other in runtime.room_climates(self.hass, self._room_key):
+            if other is not self:
+                other.async_apply_room_target(target)
         await self._async_control("target", force_write=False)
+
+    @callback
+    def async_apply_room_target(self, target: float) -> None:
+        """Follow a set-point change made on another circuit of the room."""
+        target = min(self._attr_max_temp, max(self._attr_min_temp, target))
+        if target == self._attr_target_temperature:
+            return
+        self._attr_target_temperature = target
+        self._update_extra_attributes()
+        self.async_write_ha_state()
+        self._request_control("target")
 
     async def async_set_hvac_mode(self, hvac_mode: HVACMode) -> None:
         """Set the HVAC mode."""
