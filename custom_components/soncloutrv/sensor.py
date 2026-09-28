@@ -2,14 +2,12 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timedelta
+from datetime import timedelta
 from collections import deque
-from typing import Any
 
 from homeassistant.components.sensor import (
     SensorDeviceClass,
     SensorEntity,
-    SensorEntityDescription,
     SensorStateClass,
 )
 from homeassistant.config_entries import ConfigEntry
@@ -24,11 +22,12 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.event import async_track_state_change_event, async_track_time_interval
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.restore_state import RestoreEntity
-from homeassistant.helpers import entity_registry as er, device_registry as dr
+from homeassistant.helpers import entity_registry as er
 from homeassistant.util import dt as dt_util
+from homeassistant.util import slugify
 from homeassistant.const import CONF_NAME
 
-from .const import DOMAIN, CONF_VALVE_ENTITY, CONF_TEMP_SENSOR, CONF_ROOM_ID
+from .const import DOMAIN, CONF_VALVE_ENTITY, CONF_TEMP_SENSOR, CONF_ROOM_ID, STATS_EPOCH, VERSION
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -54,7 +53,6 @@ async def async_setup_entry(
     # === BASIC PROXY SENSORS ===
     # Improved Discovery: Look up entities via device registry if possible
     entity_reg = er.async_get(hass)
-    device_reg = dr.async_get(hass)
     
     device_id = None
     
@@ -68,7 +66,6 @@ async def async_setup_entry(
     battery_entity = None
     temp_entity = None
     valve_pos_entity = None  # Proxy entity from TRV (opening)
-    valve_close_entity = None  # Proxy entity from TRV (closing)
     
     if device_id:
         # Iterate over all entities of this device
@@ -100,14 +97,9 @@ async def async_setup_entry(
                  if not temp_entity:
                      temp_entity = entry.entity_id
             
-            # Match Valve Position (if exposed as sensor or number)
-            # Typically "position" or "valve_opening_degree"
-            if ("position" in entry.entity_id or "valve" in entry.entity_id) and \
-               entry.domain in ["sensor", "number"] and \
-               entry.entity_id != valve_entity: # Don't match the climate entity
-                # Avoid matching our own entities (loop)
-                if DOMAIN not in entry.entity_id:
-                     valve_pos_entity = entry.entity_id
+            # NOTE: v1 matched any entity containing "valve"/"position" here and
+            # frequently picked a motor voltage sensor, which corrupted all
+            # statistics. The opening degree entity is resolved explicitly below.
 
     # Fallback to string manipulation if device lookup failed or entities not found
     base_entity_id = valve_entity.replace('climate.', '')
@@ -147,11 +139,13 @@ async def async_setup_entry(
     else:
         _LOGGER.warning("No temperature sensor found for %s", valve_entity)
         
-    # Valve position entity for statistics (opening degree)
-    if not valve_pos_entity:
-        candidate = f"number.{base_entity_id}_valve_opening_degree"
-        if hass.states.get(candidate):
-            valve_pos_entity = candidate
+    # Valve position entity for statistics (opening degree as set on the TRV)
+    valve_pos_entity = f"number.{base_entity_id}_valve_opening_degree"
+    if device_id:
+        for entry in er.async_entries_for_device(entity_reg, device_id):
+            if entry.domain == "number" and entry.entity_id.endswith("_valve_opening_degree"):
+                valve_pos_entity = entry.entity_id
+                break
 
     # Note: We no longer create separate SonTRV proxy sensors for TRV valve
     # opening/closing. The native SonTRV sensors (reading from the climate
@@ -160,34 +154,15 @@ async def async_setup_entry(
     # to drive the advanced statistics sensors below.
     
     # === ADVANCED STATISTICS & ROOM DEBUG SENSORS ===
-    # Find the climate entity ID from entity registry
-    entity_reg = er.async_get(hass)
-    climate_entity_id = None
-    
-    # Search for climate entity with matching config_entry_id
-    for entity in entity_reg.entities.values():
-        if (entity.config_entry_id == config_entry.entry_id and 
-            entity.domain == "climate"):
-            climate_entity_id = entity.entity_id
-            break
-    
-    # If not found via config entry linkage, try to find by name match or fallback
+    # Resolve our own climate entity via its unique id (stable across renames).
+    climate_entity_id = entity_reg.async_get_entity_id(
+        "climate", DOMAIN, f"{DOMAIN}_{config_entry.entry_id}"
+    )
     if not climate_entity_id:
-        # Fallback 1: Try to construct from valve entity input if it is a climate entity
-        if valve_entity.startswith("climate."):
-             climate_entity_id = valve_entity # Use the wrapped entity? No, we need OUR entity.
-        
-        # Fallback 2: Construct expected entity ID from name
-        climate_name = config_entry.data.get(CONF_NAME, '').lower().replace(' ', '_')
-        # Handle default HA naming normalization (umlauts, etc.) somewhat simply
-        climate_entity_id = (
-            f"climate.sontrv_{climate_name}"
-            if not climate_name.startswith("sontrv")
-            else f"climate.{climate_name}"
-        )
-        
-        _LOGGER.warning("Could not find climate entity in registry. Guessing ID: %s", climate_entity_id)
-    
+        # First setup: the climate platform may not be registered yet. HA
+        # derives the entity id from the configured name.
+        climate_entity_id = f"climate.{slugify(config_entry.data.get(CONF_NAME, ''))}"
+
     _LOGGER.info("Using climate entity ID: %s for sensors", climate_entity_id)
 
     # === ROOM-LEVEL PID DEBUG SENSOR ===
@@ -195,7 +170,7 @@ async def async_setup_entry(
     # sensor can read the shared RoomPIDState from hass.data[DOMAIN]["room_states"].
     # Prefer updated room_id from options if available.
     room_id = config_entry.options.get(CONF_ROOM_ID, config_entry.data.get(CONF_ROOM_ID))
-    temp_sensor = config_entry.data.get(CONF_TEMP_SENSOR)
+    temp_sensor = config_entry.options.get(CONF_TEMP_SENSOR, config_entry.data.get(CONF_TEMP_SENSOR))
     room_key = room_id or temp_sensor
 
     # Create at most one room sensor per room across all config entries.
@@ -203,17 +178,21 @@ async def async_setup_entry(
     room_sensor_registry: set[str] = domain_data.setdefault("room_pid_sensors", set())
     room_temp_registry: set[str] = domain_data.setdefault("room_temp_sensors", set())
 
-    if room_key and room_key not in room_sensor_registry and climate_entity_id:
+    pid_owner: dict[str, str] = domain_data.setdefault("room_pid_sensors_owner", {})
+    temp_owner: dict[str, str] = domain_data.setdefault("room_temp_sensors_owner", {})
+    if room_key and pid_owner.get(room_key) in (None, config_entry.entry_id) and climate_entity_id:
         sensors.append(SonClouTRVRoomPIDSensor(hass, config_entry, climate_entity_id, room_key))
         room_sensor_registry.add(room_key)
+        pid_owner[room_key] = config_entry.entry_id
         _LOGGER.info("Added room-level PID debug sensor for room '%s'", room_key)
 
     # Optional: Raum-Temperatursensor, der die konfigurierte externe
     # Temperaturquelle für diesen Raum spiegelt, so dass verbundene Räume einen
     # gemeinsamen Temperaturwert haben.
-    if room_key and room_key not in room_temp_registry and temp_sensor:
+    if room_key and temp_owner.get(room_key) in (None, config_entry.entry_id) and temp_sensor:
         sensors.append(SonClouTRVRoomTemperatureSensor(hass, config_entry, temp_sensor, room_key))
         room_temp_registry.add(room_key)
+        temp_owner[room_key] = config_entry.entry_id
         _LOGGER.info("Added room-level temperature sensor for room '%s'", room_key)
 
     # Always add native SonTRV valve position sensor (reads from climate entity)
@@ -303,7 +282,7 @@ class SonClouTRVProxySensor(SensorEntity):
             name=f"SonTRV {config_entry.data['name']}",
             manufacturer="k2dp2k",
             model="Smart Thermostat Control",
-            sw_version="1.1.0",
+            sw_version=VERSION,
         )
         
         if description:
@@ -339,10 +318,12 @@ class SonClouTRVProxySensor(SensorEntity):
         source_state = self.hass.states.get(self._source_entity_id)
         if source_state and source_state.state not in ("unavailable", "unknown"):
             self._attr_native_value = source_state.state
-            # Copy unit and device class from source
-            self._attr_native_unit_of_measurement = source_state.attributes.get("unit_of_measurement")
-            self._attr_device_class = source_state.attributes.get("device_class")
-            self._attr_state_class = source_state.attributes.get("state_class")
+            # Copy unit and device class from source (device class only
+            # together with a unit, otherwise HA rejects the entity).
+            unit = source_state.attributes.get("unit_of_measurement")
+            self._attr_native_unit_of_measurement = unit
+            self._attr_device_class = source_state.attributes.get("device_class") if unit else None
+            self._attr_state_class = source_state.attributes.get("state_class") if unit else None
 
 
 class SonClouTRVNativeValvePositionSensor(SensorEntity):
@@ -378,7 +359,7 @@ class SonClouTRVNativeValvePositionSensor(SensorEntity):
             name=f"SonTRV {config_entry.data[CONF_NAME]}",
             manufacturer="k2dp2k",
             model="Smart Thermostat Control",
-            sw_version="1.1.1",
+            sw_version=VERSION,
         )
         
         self._attr_extra_state_attributes = {
@@ -489,7 +470,7 @@ class SonClouTRVNativeValveClosingSensor(SensorEntity):
             name=f"SonTRV {config_entry.data[CONF_NAME]}",
             manufacturer="k2dp2k",
             model="Smart Thermostat Control",
-            sw_version="1.1.1",
+            sw_version=VERSION,
         )
 
         self._attr_extra_state_attributes = {
@@ -602,7 +583,7 @@ class SonClouTRVWindowStateSensor(SensorEntity):
             name=f"SonTRV {config_entry.data[CONF_NAME]}",
             manufacturer="k2dp2k",
             model="Smart Thermostat Control",
-            sw_version="1.1.1",
+            sw_version=VERSION,
         )
 
         self._attr_extra_state_attributes = {
@@ -715,7 +696,7 @@ class SonClouTRVRoomTemperatureSensor(SensorEntity):
             name=f"SonTRV {config_entry.data[CONF_NAME]}",
             manufacturer="k2dp2k",
             model="Smart Thermostat Control",
-            sw_version="1.1.1",
+            sw_version=VERSION,
         )
 
         self._attr_extra_state_attributes = {
@@ -793,7 +774,7 @@ class SonClouTRVRoomPIDSensor(SensorEntity):
             name=f"SonTRV {config_entry.data[CONF_NAME]}",
             manufacturer="k2dp2k",
             model="Smart Thermostat Control",
-            sw_version="1.1.1",
+            sw_version=VERSION,
         )
 
         self._attr_extra_state_attributes = {
@@ -835,44 +816,30 @@ class SonClouTRVRoomPIDSensor(SensorEntity):
         self.async_write_ha_state()
 
     async def _async_update_from_room_state(self) -> None:
-        """Read the shared RoomPIDState from hass.data and update attributes."""
-        domain_data = self.hass.data.get(DOMAIN)
-        if not domain_data:
+        """Mirror the room controller values exposed by the climate entity."""
+        state = self.hass.states.get(self._climate_entity_id)
+        if state is None:
             return
-
-        room_states = domain_data.get("room_states")
-        if not room_states:
-            return
-
-        state = room_states.get(self._room_key)
-        if not state:
-            return
-
-        try:
-            # Main state: last PID output as room heating demand 0-100%
-            last_output = getattr(state, "last_output", None)
-            integral_error = getattr(state, "integral_error", None)
-            prev_error = getattr(state, "prev_error", None)
-            last_calc_time = getattr(state, "last_calc_time", None)
-            avg_error = getattr(state, "avg_error", None)
-
-            if last_output is not None:
-                self._attr_native_value = round(float(last_output), 1)
-
-            attrs = dict(self._attr_extra_state_attributes or {})
-            if integral_error is not None:
-                attrs["room_integral_error"] = round(float(integral_error), 3)
-            if prev_error is not None:
-                attrs["room_prev_error"] = round(float(prev_error), 3)
-            if last_calc_time is not None:
-                # Represent as ISO string for easier debugging
-                attrs["room_last_calc_time"] = last_calc_time.isoformat()
-            if avg_error is not None:
-                attrs["room_avg_error"] = round(float(avg_error), 3)
-
-            self._attr_extra_state_attributes = attrs
-        except Exception as err:  # pragma: no cover - defensive
-            _LOGGER.error("Error updating room PID sensor for room %s: %s", self._room_key, err)
+        attrs = state.attributes
+        demand = attrs.get("room_demand")
+        if demand is not None:
+            try:
+                self._attr_native_value = round(float(demand), 1)
+            except (TypeError, ValueError):
+                pass
+        extra = dict(self._attr_extra_state_attributes or {})
+        for key in (
+            "pid_integral_error",
+            "pid_ff",
+            "ff_learned",
+            "predicted_error",
+            "temperature_slope",
+            "learning",
+            "no_heat_supply",
+            "control_reason",
+        ):
+            extra[key] = attrs.get(key)
+        self._attr_extra_state_attributes = extra
 
 
 # Helper function for device info
@@ -883,14 +850,37 @@ def get_device_info(config_entry: ConfigEntry) -> DeviceInfo:
         name=f"SonTRV {config_entry.data[CONF_NAME]}",
         manufacturer="k2dp2k",
         model="Smart Thermostat Control",
-        sw_version="1.1.1",
+        sw_version=VERSION,
     )
 
 
 # ===== 1. ENERGY & EFFICIENCY SENSORS =====
 
+
+def _restored_float(last, attr_ok: bool = True) -> float | None:
+    """Return the restored numeric state if it belongs to the current epoch."""
+    if last is None or not attr_ok:
+        return None
+    if last.attributes.get("stats_epoch") != STATS_EPOCH:
+        return None
+    try:
+        return float(last.state)
+    except (TypeError, ValueError):
+        return None
+
+
+def _valve_value(state) -> float | None:
+    if not state or state.state in ("unavailable", "unknown"):
+        return None
+    try:
+        value = float(state.state)
+    except (TypeError, ValueError):
+        return None
+    return value if 0.0 <= value <= 100.0 else None
+
+
 class SonClouTRVHeatingDurationSensor(RestoreEntity, SensorEntity):
-    """Track heating duration (today/week)."""
+    """Track heating duration (today/week) = time with valve opening > 0."""
 
     def __init__(self, hass, config_entry, valve_entity, period):
         self.hass = hass
@@ -903,59 +893,54 @@ class SonClouTRVHeatingDurationSensor(RestoreEntity, SensorEntity):
         self._attr_device_class = SensorDeviceClass.DURATION
         self._attr_state_class = SensorStateClass.TOTAL_INCREASING
         self._attr_device_info = get_device_info(config_entry)
-        self._duration_seconds = 0
-        self._last_valve_state = 0
+        self._attr_extra_state_attributes = {"stats_epoch": STATS_EPOCH, "source": valve_entity}
+        self._duration_seconds = 0.0
+        self._last_valve_state = 0.0
         self._last_update = None
         self._reset_time = self._get_next_reset()
 
     def _get_next_reset(self):
         now = dt_util.now()
+        start = now.replace(hour=0, minute=0, second=0, microsecond=0)
         if self._period == "today":
-            return (now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
-        days = (7 - now.weekday()) % 7 or 7
-        return (now + timedelta(days=days)).replace(hour=0, minute=0, second=0, microsecond=0)
+            return start + timedelta(days=1)
+        return start + timedelta(days=7 - now.weekday())
 
     async def async_added_to_hass(self):
         await super().async_added_to_hass()
-        if (last := await self.async_get_last_state()):
-            try:
-                self._duration_seconds = float(last.state or 0) * 3600
-            except (ValueError, TypeError):
-                pass
-        self._remove_listener = async_track_state_change_event(self.hass, [self._valve_entity], self._update)
-        self._remove_interval = async_track_time_interval(self.hass, self._check_reset, timedelta(minutes=1))
+        last = await self.async_get_last_state()
+        value = _restored_float(last)
+        if value is not None and last is not None:
+            # only keep the value if it belongs to the current day/week
+            previous_reset = self._reset_time - (timedelta(days=1) if self._period == "today" else timedelta(days=7))
+            if last.last_updated >= dt_util.as_utc(previous_reset):
+                self._duration_seconds = value * 3600
+        self._attr_native_value = round(self._duration_seconds / 3600, 2)
+        self.async_on_remove(async_track_state_change_event(self.hass, [self._valve_entity], self._update))
+        self.async_on_remove(async_track_time_interval(self.hass, self._tick, timedelta(minutes=1)))
         await self._update()
 
-    async def async_will_remove_from_hass(self):
-        if hasattr(self, '_remove_listener'): self._remove_listener()
-        if hasattr(self, '_remove_interval'): self._remove_interval()
-
-    @callback
-    async def _update(self, event=None):
-        state = self.hass.states.get(self._valve_entity)
-        if not state or state.state in ("unavailable", "unknown"): return
-        try:
-            pos = float(state.state)
-            now = dt_util.now()
-            if self._last_update and self._last_valve_state > 0:
-                self._duration_seconds += (now - self._last_update).total_seconds()
-            self._last_valve_state = pos
-            self._last_update = now
-            self._attr_native_value = round(self._duration_seconds / 3600, 2)
-            self.async_write_ha_state()
-        except (ValueError, TypeError):
-            pass
-
-    async def _check_reset(self, now=None):
+    async def _tick(self, now=None):
         if dt_util.now() >= self._reset_time:
-            self._duration_seconds = 0
+            self._duration_seconds = 0.0
             self._reset_time = self._get_next_reset()
-            self._attr_native_value = 0
-            self.async_write_ha_state()
+            self._last_update = dt_util.now()
+        await self._update()
+
+    async def _update(self, event=None):
+        pos = _valve_value(self.hass.states.get(self._valve_entity))
+        now = dt_util.now()
+        if self._last_update is not None and self._last_valve_state > 0:
+            self._duration_seconds += (now - self._last_update).total_seconds()
+        self._last_update = now
+        if pos is not None:
+            self._last_valve_state = pos
+        self._attr_native_value = round(self._duration_seconds / 3600, 2)
+        self.async_write_ha_state()
 
 
 class SonClouTRVHeatingEnergySensor(RestoreEntity, SensorEntity):
-    """Estimate heating energy based on valve position × time."""
+    """Estimate heating energy based on valve opening x time (rough)."""
 
     def __init__(self, hass, config_entry, valve_entity):
         self.hass = hass
@@ -967,46 +952,36 @@ class SonClouTRVHeatingEnergySensor(RestoreEntity, SensorEntity):
         self._attr_device_class = SensorDeviceClass.ENERGY
         self._attr_state_class = SensorStateClass.TOTAL_INCREASING
         self._attr_device_info = get_device_info(config_entry)
-        self._energy_kwh = 0
-        self._last_valve_state = 0
+        self._energy_kwh = 0.0
+        self._last_valve_state = 0.0
         self._last_update = None
 
     async def async_added_to_hass(self):
         await super().async_added_to_hass()
-        if (last := await self.async_get_last_state()):
-            try:
-                self._energy_kwh = float(last.state or 0)
-            except (ValueError, TypeError):
-                pass
-        self._remove_listener = async_track_state_change_event(self.hass, [self._valve_entity], self._update)
-        self._remove_interval = async_track_time_interval(self.hass, self._update, SCAN_INTERVAL)
+        value = _restored_float(await self.async_get_last_state())
+        if value is not None:
+            self._energy_kwh = value
+        self.async_on_remove(async_track_state_change_event(self.hass, [self._valve_entity], self._update))
+        self.async_on_remove(async_track_time_interval(self.hass, self._update, SCAN_INTERVAL))
         await self._update()
 
-    async def async_will_remove_from_hass(self):
-        if hasattr(self, '_remove_listener'): self._remove_listener()
-        if hasattr(self, '_remove_interval'): self._remove_interval()
-
-    @callback
     async def _update(self, event=None):
-        state = self.hass.states.get(self._valve_entity)
-        if not state or state.state in ("unavailable", "unknown"):
-            return
-        try:
-            pos = float(state.state)
-            now = dt_util.now()
-            if self._last_update and self._last_valve_state > 0:
-                hours = (now - self._last_update).total_seconds() / 3600
-                self._energy_kwh += (self._last_valve_state / 100) * HEATING_POWER_PER_PERCENT * hours
+        pos = _valve_value(self.hass.states.get(self._valve_entity))
+        now = dt_util.now()
+        if self._last_update is not None and self._last_valve_state > 0:
+            hours = (now - self._last_update).total_seconds() / 3600
+            self._energy_kwh += (self._last_valve_state / 100) * HEATING_POWER_PER_PERCENT * hours
+        self._last_update = now
+        if pos is not None:
             self._last_valve_state = pos
-            self._last_update = now
-            self._attr_native_value = round(self._energy_kwh, 3)
-            self._attr_extra_state_attributes = {
-                "power_per_percent_kw": HEATING_POWER_PER_PERCENT,
-                "current_power_kw": round((pos / 100) * HEATING_POWER_PER_PERCENT, 3),
-            }
-            self.async_write_ha_state()
-        except (ValueError, TypeError) as err:
-            _LOGGER.debug("Error updating energy sensor: %s", err)
+        self._attr_native_value = round(self._energy_kwh, 3)
+        self._attr_extra_state_attributes = {
+            "stats_epoch": STATS_EPOCH,
+            "source": self._valve_entity,
+            "power_per_percent_kw": HEATING_POWER_PER_PERCENT,
+            "current_power_kw": round((self._last_valve_state / 100) * HEATING_POWER_PER_PERCENT, 3),
+        }
+        self.async_write_ha_state()
 
 
 class SonClouTRVEfficiencySensor(SensorEntity):
@@ -1066,7 +1041,7 @@ class SonClouTRVEfficiencySensor(SensorEntity):
 # ===== 2. VALVE HEALTH & MAINTENANCE =====
 
 class SonClouTRVLastMovementSensor(RestoreEntity, SensorEntity):
-    """Track when valve was last moved."""
+    """Track when the valve was last moved."""
 
     def __init__(self, hass, config_entry, valve_entity):
         self.hass = hass
@@ -1077,36 +1052,29 @@ class SonClouTRVLastMovementSensor(RestoreEntity, SensorEntity):
         self._attr_device_class = SensorDeviceClass.TIMESTAMP
         self._attr_device_info = get_device_info(config_entry)
         self._last_pos = None
-        self._last_movement = None
 
     async def async_added_to_hass(self):
         await super().async_added_to_hass()
-        if (last := await self.async_get_last_state()) and last.state not in ("unavailable", "unknown"):
-            try:
-                self._last_movement = dt_util.parse_datetime(last.state)
-            except (ValueError, TypeError):
-                pass
-        self._remove_listener = async_track_state_change_event(self.hass, [self._valve_entity], self._detect)
+        last = await self.async_get_last_state()
+        if last and last.state not in ("unavailable", "unknown") and last.attributes.get("stats_epoch") == STATS_EPOCH:
+            self._attr_native_value = dt_util.parse_datetime(last.state)
+        self._last_pos = _valve_value(self.hass.states.get(self._valve_entity))
+        self._update_attrs()
+        self.async_on_remove(async_track_state_change_event(self.hass, [self._valve_entity], self._detect))
 
-    async def async_will_remove_from_hass(self):
-        if hasattr(self, '_remove_listener'): self._remove_listener()
+    def _update_attrs(self):
+        days = (dt_util.now() - self._attr_native_value).days if self._attr_native_value else None
+        self._attr_extra_state_attributes = {"stats_epoch": STATS_EPOCH, "days_since_movement": days}
 
-    @callback
     async def _detect(self, event):
-        state = event.data.get("new_state")
-        if not state or state.state in ("unavailable", "unknown"):
+        pos = _valve_value(event.data.get("new_state"))
+        if pos is None:
             return
-        try:
-            pos = float(state.state)
-            if self._last_pos is not None and abs(pos - self._last_pos) > 1:
-                self._last_movement = dt_util.now()
-                self._attr_native_value = self._last_movement
-                days = (dt_util.now() - self._last_movement).days if self._last_movement else 0
-                self._attr_extra_state_attributes = {"days_since_movement": days}
-                self.async_write_ha_state()
-            self._last_pos = pos
-        except (ValueError, TypeError):
-            pass
+        if self._last_pos is not None and abs(pos - self._last_pos) >= 1:
+            self._attr_native_value = dt_util.now()
+            self._update_attrs()
+            self.async_write_ha_state()
+        self._last_pos = pos
 
 
 class SonClouTRVMovementCountSensor(RestoreEntity, SensorEntity):
@@ -1120,39 +1088,31 @@ class SonClouTRVMovementCountSensor(RestoreEntity, SensorEntity):
         self._attr_icon = "mdi:counter"
         self._attr_state_class = SensorStateClass.TOTAL_INCREASING
         self._attr_device_info = get_device_info(config_entry)
+        self._attr_extra_state_attributes = {"stats_epoch": STATS_EPOCH}
         self._count = 0
         self._last_pos = None
 
     async def async_added_to_hass(self):
         await super().async_added_to_hass()
-        if (last := await self.async_get_last_state()):
-            try:
-                self._count = int(last.state or 0)
-            except (ValueError, TypeError):
-                pass
-        self._remove_listener = async_track_state_change_event(self.hass, [self._valve_entity], self._count_movement)
+        value = _restored_float(await self.async_get_last_state())
+        self._count = int(value) if value is not None else 0
+        self._attr_native_value = self._count
+        self._last_pos = _valve_value(self.hass.states.get(self._valve_entity))
+        self.async_on_remove(async_track_state_change_event(self.hass, [self._valve_entity], self._count_movement))
 
-    async def async_will_remove_from_hass(self):
-        if hasattr(self, '_remove_listener'): self._remove_listener()
-
-    @callback
     async def _count_movement(self, event):
-        state = event.data.get("new_state")
-        if not state or state.state in ("unavailable", "unknown"):
+        pos = _valve_value(event.data.get("new_state"))
+        if pos is None:
             return
-        try:
-            pos = float(state.state)
-            if self._last_pos is not None and abs(pos - self._last_pos) > 1:
-                self._count += 1
-                self._attr_native_value = self._count
-                self.async_write_ha_state()
-            self._last_pos = pos
-        except (ValueError, TypeError):
-            pass
+        if self._last_pos is not None and abs(pos - self._last_pos) >= 1:
+            self._count += 1
+            self._attr_native_value = self._count
+            self.async_write_ha_state()
+        self._last_pos = pos
 
 
 class SonClouTRVTotalRuntimeSensor(RestoreEntity, SensorEntity):
-    """Track total valve runtime (lifetime)."""
+    """Track weighted valve runtime (hours x opening)."""
 
     def __init__(self, hass, config_entry, valve_entity):
         self.hass = hass
@@ -1164,41 +1124,30 @@ class SonClouTRVTotalRuntimeSensor(RestoreEntity, SensorEntity):
         self._attr_device_class = SensorDeviceClass.DURATION
         self._attr_state_class = SensorStateClass.TOTAL_INCREASING
         self._attr_device_info = get_device_info(config_entry)
-        self._runtime_seconds = 0
-        self._last_valve = 0
+        self._attr_extra_state_attributes = {"stats_epoch": STATS_EPOCH, "source": valve_entity}
+        self._runtime_seconds = 0.0
+        self._last_valve = 0.0
         self._last_update = None
 
     async def async_added_to_hass(self):
         await super().async_added_to_hass()
-        if (last := await self.async_get_last_state()):
-            try:
-                self._runtime_seconds = float(last.state or 0) * 3600
-            except (ValueError, TypeError):
-                pass
-        self._remove_listener = async_track_state_change_event(self.hass, [self._valve_entity], self._update)
-        self._remove_interval = async_track_time_interval(self.hass, self._update, SCAN_INTERVAL)
+        value = _restored_float(await self.async_get_last_state())
+        if value is not None:
+            self._runtime_seconds = value * 3600
+        self.async_on_remove(async_track_state_change_event(self.hass, [self._valve_entity], self._update))
+        self.async_on_remove(async_track_time_interval(self.hass, self._update, SCAN_INTERVAL))
+        await self._update()
 
-    async def async_will_remove_from_hass(self):
-        if hasattr(self, '_remove_listener'): self._remove_listener()
-        if hasattr(self, '_remove_interval'): self._remove_interval()
-
-    @callback
     async def _update(self, event=None):
-        state = self.hass.states.get(self._valve_entity)
-        if not state or state.state in ("unavailable", "unknown"):
-            return
-        try:
-            pos = float(state.state)
-            now = dt_util.now()
-            if self._last_update and self._last_valve > 0:
-                delta = (now - self._last_update).total_seconds()
-                self._runtime_seconds += delta * (self._last_valve / 100)
+        pos = _valve_value(self.hass.states.get(self._valve_entity))
+        now = dt_util.now()
+        if self._last_update is not None and self._last_valve > 0:
+            self._runtime_seconds += (now - self._last_update).total_seconds() * (self._last_valve / 100)
+        self._last_update = now
+        if pos is not None:
             self._last_valve = pos
-            self._last_update = now
-            self._attr_native_value = round(self._runtime_seconds / 3600, 1)
-            self.async_write_ha_state()
-        except (ValueError, TypeError):
-            pass
+        self._attr_native_value = round(self._runtime_seconds / 3600, 1)
+        self.async_write_ha_state()
 
 
 # ===== 3. TEMPERATURE ANALYSIS =====

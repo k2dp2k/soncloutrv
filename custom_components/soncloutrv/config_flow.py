@@ -20,30 +20,15 @@ from .const import (
     CONF_MIN_TEMP,
     CONF_MAX_TEMP,
     CONF_TARGET_TEMP,
-    CONF_HYSTERESIS,
-    CONF_COLD_TOLERANCE,
-    CONF_HOT_TOLERANCE,
-    CONF_MIN_CYCLE_DURATION,
-    CONF_MAX_VALVE_POSITION,
     CONF_VALVE_OPENING_STEP,
     CONF_CONTROL_MODE,
-    CONF_TIME_CONTROL_ENABLED,
-    CONF_TIME_START,
-    CONF_TIME_END,
-    CONF_PROPORTIONAL_GAIN,
     CONTROL_MODE_BINARY,
     CONTROL_MODE_PROPORTIONAL,
-    VALVE_OPENING_STEPS,
     DEFAULT_NAME,
     DEFAULT_MIN_TEMP,
     DEFAULT_MAX_TEMP,
     DEFAULT_TARGET_TEMP,
     DEFAULT_ROOMS,
-    DEFAULT_HYSTERESIS,
-    DEFAULT_COLD_TOLERANCE,
-    DEFAULT_HOT_TOLERANCE,
-    DEFAULT_MIN_CYCLE_DURATION,
-    DEFAULT_MAX_VALVE_POSITION,
     DEFAULT_VALVE_OPENING_STEP,
     DEFAULT_CONTROL_MODE,
     CONF_OUTSIDE_TEMP_SENSOR,
@@ -62,7 +47,41 @@ from .const import (
     CONF_WINDOW_SENSOR_SCOPE,
     WINDOW_SCOPE_LOCAL,
     WINDOW_SCOPE_ALL,
+    CONFIG_VERSION,
+    CONF_HEATING_TYPE,
+    CONF_SENSOR_TIMEOUT,
+    CONF_ADAPTIVE_FF,
+    CONF_PWM_PERIOD,
+    CONTROL_MODE_PID,
+    CONTROL_MODE_PWM,
+    DEFAULT_SENSOR_TIMEOUT,
+    DEFAULT_ADAPTIVE_FF,
+    HEATING_TYPE_FLOOR,
+    HEATING_TYPE_RADIATOR,
+    STATS_EPOCH,
 )
+from .controller import get_profile
+
+HEATING_TYPE_OPTIONS = [
+    {"value": HEATING_TYPE_FLOOR, "label": "Flächenheizung / Fußboden (Estrich, träge)"},
+    {"value": HEATING_TYPE_RADIATOR, "label": "Heizkörper (schnell)"},
+]
+CONTROL_MODE_OPTIONS = [
+    {"value": CONTROL_MODE_PID, "label": "PID (vorausschauend, stetig) - empfohlen"},
+    {"value": CONTROL_MODE_PWM, "label": "Takt (PWM, auf/zu im Zeitraster)"},
+    {"value": CONTROL_MODE_BINARY, "label": "Binär (Zweipunkt mit Hysterese)"},
+    {"value": CONTROL_MODE_PROPORTIONAL, "label": "Proportional (Legacy)"},
+]
+
+
+def _room_selector() -> selector.SelectSelector:
+    return selector.SelectSelector(
+        selector.SelectSelectorConfig(
+            options=DEFAULT_ROOMS,
+            custom_value=True,
+            mode=selector.SelectSelectorMode.DROPDOWN,
+        )
+    )
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -103,7 +122,7 @@ def _filter_sonoff_trvzb_entities(hass: HomeAssistant) -> list[str]:
 class SonClouTRVConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     """Handle a config flow for SonClouTRV."""
 
-    VERSION = 1
+    VERSION = CONFIG_VERSION
 
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
@@ -130,13 +149,23 @@ class SonClouTRVConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 await self.async_set_unique_id(valve_entity)
                 self._abort_if_unique_id_configured()
                 
+                heating_type = user_input.pop(CONF_HEATING_TYPE, HEATING_TYPE_FLOOR)
+                profile = get_profile(heating_type)
                 return self.async_create_entry(
                     title=user_input[CONF_NAME],
                     data=user_input,
+                    options={
+                        CONF_HEATING_TYPE: heating_type,
+                        "kp": profile.kp,
+                        "ki": round(profile.ki, 6),
+                        "kd": 0.0,
+                        "ka": 0.0,
+                        "stats_epoch": STATS_EPOCH,
+                    },
                 )
 
         # Get filtered SONOFF TRVZB entities
-        available_valves = _filter_sonoff_trvzb_entities(self.hass)
+        # (TRVZB filter helper kept for reference; the selector filters by MQTT)
         
         # Build the configuration schema
         data_schema = vol.Schema(
@@ -148,9 +177,10 @@ class SonClouTRVConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                         integration="mqtt",
                     )
                 ),
-                vol.Optional(CONF_ROOM_ID, default=DEFAULT_ROOMS[0]): selector.SelectSelector(
+                vol.Optional(CONF_ROOM_ID, default=DEFAULT_ROOMS[0]): _room_selector(),
+                vol.Required(CONF_HEATING_TYPE, default=HEATING_TYPE_FLOOR): selector.SelectSelector(
                     selector.SelectSelectorConfig(
-                        options=DEFAULT_ROOMS,
+                        options=HEATING_TYPE_OPTIONS,
                         mode=selector.SelectSelectorMode.DROPDOWN,
                     )
                 ),
@@ -216,152 +246,112 @@ class SonClouTRVConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         config_entry: config_entries.ConfigEntry,
     ) -> config_entries.OptionsFlow:
         """Get the options flow for this handler."""
-        return SonClouTRVOptionsFlow(config_entry)
+        return SonClouTRVOptionsFlow()
 
 
 class SonClouTRVOptionsFlow(config_entries.OptionsFlow):
     """Handle options flow for SonClouTRV."""
 
-    def __init__(self, config_entry: config_entries.ConfigEntry) -> None:
-        """Initialize options flow."""
-        # self.config_entry is already set by base class or handled differently in newer HA versions
-        # OptionsFlow provides self.config_entry automatically; we do not need
-        # to assign it here.
-        pass
-
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
     ) -> config_entries.FlowResult:
         """Manage the options."""
-        if user_input is not None:
-            # Clean up old weather_entity key if present and outside_temp_sensor is used
-            if CONF_OUTSIDE_TEMP_SENSOR in user_input:
-                user_input.pop(CONF_WEATHER_ENTITY, None)
-                
-            # Merge with existing config entry data and options to preserve
-            # both required and optional fields. Options should override data
-            # for the same keys, and the new user_input should override both.
-            base = {**self.config_entry.data, **self.config_entry.options}
-            merged_data = {**base, **user_input}
-            return self.async_create_entry(title="", data=merged_data)
+        entry = self.config_entry
+        current = {**entry.data, **entry.options}
 
+        if user_input is not None:
+            options = {**entry.options, **user_input}
+            # Optional entity fields that were cleared must be removed.
+            for key in (CONF_OUTSIDE_TEMP_SENSOR, CONF_WINDOW_SENSORS):
+                if key not in user_input:
+                    options.pop(key, None)
+            if CONF_OUTSIDE_TEMP_SENSOR in user_input:
+                options.pop(CONF_WEATHER_ENTITY, None)
+            # Switching the heating type resets the gains to the new profile.
+            new_type = user_input.get(CONF_HEATING_TYPE)
+            if new_type and new_type != current.get(CONF_HEATING_TYPE, HEATING_TYPE_FLOOR):
+                profile = get_profile(new_type)
+                options.update({"kp": profile.kp, "ki": round(profile.ki, 6), "kd": 0.0})
+                for key in ("min_valve_update_interval", "prediction_horizon", CONF_PWM_PERIOD):
+                    options.pop(key, None)
+            return self.async_create_entry(title="", data=options)
+
+        def sv(key: str, default: Any = None) -> dict[str, Any]:
+            value = current.get(key, default)
+            return {"suggested_value": value} if value is not None else {}
+
+        outside_default = current.get(CONF_OUTSIDE_TEMP_SENSOR) or current.get(CONF_WEATHER_ENTITY)
         data_schema = vol.Schema(
             {
+                vol.Required(
+                    CONF_HEATING_TYPE, default=current.get(CONF_HEATING_TYPE, HEATING_TYPE_FLOOR)
+                ): selector.SelectSelector(
+                    selector.SelectSelectorConfig(
+                        options=HEATING_TYPE_OPTIONS, mode=selector.SelectSelectorMode.DROPDOWN
+                    )
+                ),
+                vol.Required(
+                    CONF_CONTROL_MODE, default=current.get(CONF_CONTROL_MODE, DEFAULT_CONTROL_MODE)
+                ): selector.SelectSelector(
+                    selector.SelectSelectorConfig(
+                        options=CONTROL_MODE_OPTIONS, mode=selector.SelectSelectorMode.DROPDOWN
+                    )
+                ),
+                vol.Required(
+                    CONF_TEMP_SENSOR, default=current.get(CONF_TEMP_SENSOR)
+                ): selector.EntitySelector(
+                    selector.EntitySelectorConfig(domain="sensor", device_class="temperature")
+                ),
                 vol.Optional(
                     CONF_OUTSIDE_TEMP_SENSOR,
-                    description={"suggested_value": self.config_entry.data.get(
-                        CONF_OUTSIDE_TEMP_SENSOR,
-                        self.config_entry.data.get(CONF_WEATHER_ENTITY),
-                    )},
+                    description={"suggested_value": outside_default} if outside_default else {},
                 ): selector.EntitySelector(
+                    selector.EntitySelectorConfig(domain=["sensor", "weather"])
+                ),
+                vol.Required(
+                    CONF_ROOM_ID, default=current.get(CONF_ROOM_ID) or DEFAULT_ROOMS[0]
+                ): _room_selector(),
+                vol.Optional(CONF_WINDOW_SENSORS, description=sv(CONF_WINDOW_SENSORS)): selector.EntitySelector(
                     selector.EntitySelectorConfig(
-                        domain=["sensor", "weather"],
-                        device_class="temperature",
+                        domain="binary_sensor", device_class=["window", "door"], multiple=True
                     )
                 ),
-                # Erlaube das nachträgliche Ändern des externen Temperatursensors
-                vol.Optional(
-                    CONF_TEMP_SENSOR,
-                    default=self.config_entry.options.get(
-                        CONF_TEMP_SENSOR,
-                        self.config_entry.data.get(CONF_TEMP_SENSOR),
-                    ),
-                ): selector.EntitySelector(
-                    selector.EntitySelectorConfig(
-                        domain="sensor",
-                        device_class="temperature",
-                    )
-                ),
-                vol.Optional(
-                    CONF_ROOM_LOGGING_ENABLED,
-                    default=self.config_entry.options.get(
-                        CONF_ROOM_LOGGING_ENABLED,
-                        self.config_entry.data.get(CONF_ROOM_LOGGING_ENABLED, DEFAULT_ROOM_LOGGING_ENABLED),
-                    ),
-                ): cv.boolean,
-                vol.Optional(
-                    CONF_ROOM_LOG_FILE,
-                    default=self.config_entry.options.get(
-                        CONF_ROOM_LOG_FILE,
-                        self.config_entry.data.get(CONF_ROOM_LOG_FILE, DEFAULT_ROOM_LOG_FILE),
-                    ),
-                ): cv.string,
-                vol.Optional(
-                    CONF_WINDOW_DROP_THRESHOLD,
-                    default=self.config_entry.options.get(
-                        CONF_WINDOW_DROP_THRESHOLD,
-                        self.config_entry.data.get(CONF_WINDOW_DROP_THRESHOLD, DEFAULT_WINDOW_DROP_THRESHOLD),
-                    ),
-                ): vol.All(vol.Coerce(float), vol.Range(min=0.1, max=5.0)),
-                vol.Optional(
-                    CONF_WINDOW_STABLE_BAND,
-                    default=self.config_entry.options.get(
-                        CONF_WINDOW_STABLE_BAND,
-                        self.config_entry.data.get(CONF_WINDOW_STABLE_BAND, DEFAULT_WINDOW_STABLE_BAND),
-                    ),
-                ): vol.All(vol.Coerce(float), vol.Range(min=0.1, max=2.0)),
-                vol.Optional(
-                    CONF_WINDOW_MAX_FREEZE,
-                    default=self.config_entry.options.get(
-                        CONF_WINDOW_MAX_FREEZE,
-                        self.config_entry.data.get(CONF_WINDOW_MAX_FREEZE, DEFAULT_WINDOW_MAX_FREEZE),
-                    ),
-                ): vol.All(vol.Coerce(int), vol.Range(min=60, max=43200)),
-                vol.Optional(
-                    CONF_WINDOW_SENSORS,
-                    default=self.config_entry.options.get(
-                        CONF_WINDOW_SENSORS,
-                        self.config_entry.data.get(CONF_WINDOW_SENSORS, []),
-                    ),
-                ): selector.EntitySelector(
-                    selector.EntitySelectorConfig(
-                        domain="binary_sensor",
-                        device_class=["window", "door"],
-                        multiple=True,
-                    )
-                ),
-                vol.Optional(
+                vol.Required(
                     CONF_WINDOW_SENSOR_SCOPE,
-                    default=self.config_entry.options.get(
-                        CONF_WINDOW_SENSOR_SCOPE,
-                        self.config_entry.data.get(CONF_WINDOW_SENSOR_SCOPE, WINDOW_SCOPE_LOCAL),
-                    ),
+                    default=current.get(CONF_WINDOW_SENSOR_SCOPE, WINDOW_SCOPE_LOCAL),
                 ): selector.SelectSelector(
                     selector.SelectSelectorConfig(
                         options=[
-                            {"value": WINDOW_SCOPE_LOCAL, "label": "Nur dieses Thermostat"},
+                            {"value": WINDOW_SCOPE_LOCAL, "label": "Nur dieser Raum"},
                             {"value": WINDOW_SCOPE_ALL, "label": "Alle SonTRV-Thermostate"},
                         ],
                         mode=selector.SelectSelectorMode.DROPDOWN,
                     )
                 ),
-                vol.Optional(
-                    CONF_MIN_TEMP,
-                    default=self.config_entry.data.get(CONF_MIN_TEMP, DEFAULT_MIN_TEMP),
+                vol.Required(
+                    CONF_WINDOW_DROP_THRESHOLD,
+                    default=current.get(CONF_WINDOW_DROP_THRESHOLD, DEFAULT_WINDOW_DROP_THRESHOLD),
+                ): vol.All(vol.Coerce(float), vol.Range(min=0.1, max=5.0)),
+                vol.Required(
+                    CONF_WINDOW_STABLE_BAND,
+                    default=current.get(CONF_WINDOW_STABLE_BAND, DEFAULT_WINDOW_STABLE_BAND),
+                ): vol.All(vol.Coerce(float), vol.Range(min=0.1, max=2.0)),
+                vol.Required(
+                    CONF_WINDOW_MAX_FREEZE,
+                    default=current.get(CONF_WINDOW_MAX_FREEZE, DEFAULT_WINDOW_MAX_FREEZE),
+                ): vol.All(vol.Coerce(int), vol.Range(min=60, max=43200)),
+                vol.Required(
+                    CONF_MIN_TEMP, default=current.get(CONF_MIN_TEMP, DEFAULT_MIN_TEMP)
                 ): vol.All(vol.Coerce(float), vol.Range(min=5, max=35)),
-                vol.Optional(
-                    CONF_MAX_TEMP,
-                    default=self.config_entry.data.get(CONF_MAX_TEMP, DEFAULT_MAX_TEMP),
+                vol.Required(
+                    CONF_MAX_TEMP, default=current.get(CONF_MAX_TEMP, DEFAULT_MAX_TEMP)
                 ): vol.All(vol.Coerce(float), vol.Range(min=5, max=35)),
-                vol.Optional(
-                    CONF_ROOM_ID,
-                    default=self.config_entry.options.get(
-                        CONF_ROOM_ID,
-                        self.config_entry.data.get(CONF_ROOM_ID, DEFAULT_ROOMS[0]),
-                    ),
-                ): selector.SelectSelector(
-                    selector.SelectSelectorConfig(
-                        options=DEFAULT_ROOMS,
-                        mode=selector.SelectSelectorMode.DROPDOWN,
-                    )
-                ),
-                vol.Optional(
-                    CONF_TARGET_TEMP,
-                    default=self.config_entry.data.get(CONF_TARGET_TEMP, DEFAULT_TARGET_TEMP),
+                vol.Required(
+                    CONF_TARGET_TEMP, default=current.get(CONF_TARGET_TEMP, DEFAULT_TARGET_TEMP)
                 ): vol.All(vol.Coerce(float), vol.Range(min=5, max=35)),
-                vol.Optional(
+                vol.Required(
                     CONF_VALVE_OPENING_STEP,
-                    default=self.config_entry.data.get(CONF_VALVE_OPENING_STEP, DEFAULT_VALVE_OPENING_STEP),
+                    default=str(current.get(CONF_VALVE_OPENING_STEP, DEFAULT_VALVE_OPENING_STEP)),
                 ): selector.SelectSelector(
                     selector.SelectSelectorConfig(
                         options=[
@@ -375,6 +365,19 @@ class SonClouTRVOptionsFlow(config_entries.OptionsFlow):
                         mode=selector.SelectSelectorMode.DROPDOWN,
                     )
                 ),
+                vol.Required(
+                    CONF_SENSOR_TIMEOUT, default=current.get(CONF_SENSOR_TIMEOUT, DEFAULT_SENSOR_TIMEOUT)
+                ): vol.All(vol.Coerce(int), vol.Range(min=10, max=1440)),
+                vol.Required(
+                    CONF_ADAPTIVE_FF, default=current.get(CONF_ADAPTIVE_FF, DEFAULT_ADAPTIVE_FF)
+                ): cv.boolean,
+                vol.Required(
+                    CONF_ROOM_LOGGING_ENABLED,
+                    default=current.get(CONF_ROOM_LOGGING_ENABLED, DEFAULT_ROOM_LOGGING_ENABLED),
+                ): cv.boolean,
+                vol.Required(
+                    CONF_ROOM_LOG_FILE, default=current.get(CONF_ROOM_LOG_FILE, DEFAULT_ROOM_LOG_FILE)
+                ): cv.string,
             }
         )
 

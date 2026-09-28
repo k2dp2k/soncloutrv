@@ -1,20 +1,28 @@
-"""Switch platform for SonClouTRV."""
+"""Switch platform for SonTRV (anti-seize / anti-calcification exercise)."""
 from __future__ import annotations
 
-import logging
 from datetime import timedelta
+import logging
+from typing import Any
 
 from homeassistant.components.switch import SwitchEntity
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import CONF_NAME
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from homeassistant.helpers.event import async_track_time_interval, async_call_later
-from homeassistant.helpers.entity import DeviceInfo
+from homeassistant.helpers.event import async_track_time_change
+from homeassistant.helpers.restore_state import RestoreEntity
 from homeassistant.util import dt as dt_util
 
-from .const import DOMAIN
+from . import runtime
+from .const import DOMAIN, VERSION
 
 _LOGGER = logging.getLogger(__name__)
+
+EXERCISE_WEEKDAY = 6  # Sunday
+EXERCISE_HOUR = 3
+MIN_DAYS_BETWEEN = 6
 
 
 async def async_setup_entry(
@@ -22,139 +30,82 @@ async def async_setup_entry(
     config_entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
-    """Set up SonClouTRV switch platform."""
-    
-    switch = AntiCalcificationSwitch(hass, config_entry)
-    async_add_entities([switch], True)
+    """Set up the switch."""
+    async_add_entities([AntiCalcificationSwitch(config_entry)])
 
 
-class AntiCalcificationSwitch(SwitchEntity):
-    """Switch to enable/disable anti-calcification protection."""
+class AntiCalcificationSwitch(SwitchEntity, RestoreEntity):
+    """Weekly valve exercise (Sunday 03:xx, staggered per circuit)."""
 
-    def __init__(
-        self,
-        hass: HomeAssistant,
-        config_entry: ConfigEntry,
-    ) -> None:
-        """Initialize the switch."""
-        self.hass = hass
-        self._config_entry = config_entry
-        self._attr_name = f"{config_entry.data['name']} Verkalkungsschutz"
+    _attr_should_poll = False
+
+    def __init__(self, config_entry: ConfigEntry) -> None:
+        self._entry = config_entry
+        name = config_entry.data[CONF_NAME]
+        self._attr_name = f"{name} Verkalkungsschutz"
         self._attr_unique_id = f"{DOMAIN}_{config_entry.entry_id}_anti_calcification"
         self._attr_icon = "mdi:water-off"
-        self._attr_is_on = True  # Default: ON (enabled)
+        self._attr_is_on = True
         self._last_exercise = None
-        self._remove_listener = None
-        
-        # Device info for grouping
+        # Stagger the circuits (they share one supply) over 03:00-03:50.
+        self._minute = (sum(ord(c) for c in config_entry.entry_id) % 6) * 10
         self._attr_device_info = DeviceInfo(
             identifiers={(DOMAIN, config_entry.entry_id)},
-            name=f"SonTRV {config_entry.data['name']}",
+            name=f"SonTRV {name}",
             manufacturer="k2dp2k",
             model="Smart Thermostat Control",
-            sw_version="1.0.0",
+            sw_version=VERSION,
         )
-        
 
     async def async_added_to_hass(self) -> None:
-        """Run when entity about to be added."""
         await super().async_added_to_hass()
-        
-        # Schedule daily check for Sunday 3:00 AM (enabled by default)
-        if self._attr_is_on:
-            self._remove_listener = async_track_time_interval(
-                self.hass,
-                self._async_check_exercise,
-                timedelta(hours=24),  # Check daily
+        if (last := await self.async_get_last_state()) is not None:
+            self._attr_is_on = last.state != "off"
+            raw = last.attributes.get("last_exercise")
+            if raw:
+                self._last_exercise = dt_util.parse_datetime(str(raw))
+        self.async_on_remove(
+            async_track_time_change(
+                self.hass, self._async_tick, hour=EXERCISE_HOUR, minute=self._minute, second=0
             )
-            _LOGGER.info("%s: Anti-calcification protection enabled by default", self._attr_name)
-
-    async def async_will_remove_from_hass(self) -> None:
-        """Run when entity will be removed."""
-        if self._remove_listener:
-            self._remove_listener()
-
-    async def async_turn_on(self, **kwargs) -> None:
-        """Turn on anti-calcification protection."""
-        self._attr_is_on = True
-        
-        # Start periodic check
-        if self._remove_listener:
-            self._remove_listener()
-        
-        self._remove_listener = async_track_time_interval(
-            self.hass,
-            self._async_check_exercise,
-            timedelta(hours=24),
         )
-        
-        _LOGGER.info("%s: Anti-calcification protection enabled", self._attr_name)
+
+    async def async_turn_on(self, **kwargs: Any) -> None:
+        self._attr_is_on = True
         self.async_write_ha_state()
 
-    async def async_turn_off(self, **kwargs) -> None:
-        """Turn off anti-calcification protection."""
+    async def async_turn_off(self, **kwargs: Any) -> None:
         self._attr_is_on = False
-        
-        # Stop periodic check
-        if self._remove_listener:
-            self._remove_listener()
-            self._remove_listener = None
-        
-        _LOGGER.info("%s: Anti-calcification protection disabled", self._attr_name)
         self.async_write_ha_state()
 
-    async def _async_check_exercise(self, now=None) -> None:
-        """Check if valve exercise is needed (Sundays at 3:00 AM)."""
-        if not self._attr_is_on:
+    async def _async_tick(self, now) -> None:
+        if not self._attr_is_on or dt_util.now().weekday() != EXERCISE_WEEKDAY:
             return
-        
-        current_time = dt_util.now()
-        
-        # Check if it's Sunday (weekday 6) and between 3:00-3:59 AM
-        if current_time.weekday() != 6:  # Not Sunday
+        # A manual exercise (button/service) also counts.
+        manual = self.hass.data.get(DOMAIN, {}).get(self._entry.entry_id, {}).get("last_exercise")
+        latest = max((d for d in (self._last_exercise, manual) if d is not None), default=None)
+        if latest is not None and dt_util.now() - latest < timedelta(days=MIN_DAYS_BETWEEN):
             return
-        
-        if current_time.hour != 3:  # Not 3 AM hour
+        climate = runtime.climate_for_entry(self.hass, self._entry.entry_id)
+        if climate is None:
+            _LOGGER.warning("%s: climate not loaded, exercise skipped", self.entity_id)
             return
-        
-        # Check if already exercised this week
-        if self._last_exercise is not None:
-            days_since_last = (current_time - self._last_exercise).days
-            if days_since_last < 7:  # Already done this week
-                return
-        
-        # Execute valve exercise
-        await self._async_exercise_valve()
-
-    async def _async_exercise_valve(self) -> None:
-        """Exercise the valve to prevent calcification (5 min open, 5 min closed)."""
-        # Find the climate entity from registry
-        try:
-            found = False
-            for entity in self.hass.data[DOMAIN].get(self._config_entry.entry_id, {}).get("entities", []):
-                if hasattr(entity, '_entity_id_base'):
-                    found = True
-                    _LOGGER.info("%s: Starting anti-calcification valve exercise (Sunday 3:00 AM)", entity.name)
-                    
-                    # Delegate to climate entity
-                    await entity.async_trigger_valve_exercise()
-                    break
-            
-            if not found:
-                _LOGGER.warning("%s: Climate entity not found in registry, valve exercise skipped", self._attr_name)
-        except Exception as err:
-            _LOGGER.error("%s: Error in exercise valve lookup: %s", self._attr_name, err)
-    
+        self._last_exercise = dt_util.now()
+        await climate.async_trigger_valve_exercise()
+        self.async_write_ha_state()
 
     @property
-    def extra_state_attributes(self) -> dict:
-        """Return extra state attributes."""
-        attrs = {
-            "description": "Automatisches Ventil-Durchbewegen jeden Sonntag um 3:00 Uhr (5 Min offen, 5 Min geschlossen)."
+    def extra_state_attributes(self) -> dict[str, Any]:
+        attrs: dict[str, Any] = {
+            "description": (
+                "Ventil jeden Sonntag gegen 3 Uhr durchbewegen (5 min offen, 5 min zu). "
+                "Funktioniert auch im Sommer bei ausgeschalteter Heizung."
+            ),
+            "schedule": f"Sonntag 03:{self._minute:02d}",
         }
         if self._last_exercise:
             attrs["last_exercise"] = self._last_exercise.isoformat()
-            days_since = (dt_util.now() - self._last_exercise).days
-            attrs["days_since_last_exercise"] = days_since
-            attrs["next_exercise_in_days"] = max(0, 7 - days_since)
+            days = (dt_util.now() - self._last_exercise).days
+            attrs["days_since_last_exercise"] = days
+            attrs["next_exercise_in_days"] = max(0, 7 - days)
         return attrs

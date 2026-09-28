@@ -3,6 +3,14 @@
 DOMAIN = "soncloutrv"
 PLATFORMS = ["climate", "sensor", "number", "switch", "button", "select"]
 
+# Integration version (keep in sync with manifest.json)
+VERSION = "2.0.0"
+# Config entry schema version. 4 = predictive room controller (v2.0.0)
+CONFIG_VERSION = 4
+# Bump to reset accumulating statistics sensors once (v2.0.0: the old
+# sensors integrated a TRV motor voltage instead of the valve opening).
+STATS_EPOCH = 4
+
 # Configuration keys
 CONF_VALVE_ENTITY = "valve_entity"
 CONF_TEMP_SENSOR = "temp_sensor"
@@ -42,6 +50,43 @@ CONF_WINDOW_MAX_FREEZE = "window_max_freeze"
 CONF_WINDOW_SENSORS = "window_sensors"
 CONF_WINDOW_SENSOR_SCOPE = "window_sensor_scope"
 
+# v2.0.0
+CONF_HEATING_TYPE = "heating_type"
+CONF_VALVE_MIN_OPENING = "valve_min_opening"
+CONF_PREDICTION_HORIZON = "prediction_horizon"  # minutes
+CONF_MIN_VALVE_UPDATE_INTERVAL = "min_valve_update_interval"  # minutes
+CONF_SENSOR_TIMEOUT = "sensor_timeout"  # minutes
+CONF_ADAPTIVE_FF = "adaptive_feed_forward"
+CONF_PWM_PERIOD = "pwm_period"  # minutes
+
+HEATING_TYPE_FLOOR = "floor"
+HEATING_TYPE_RADIATOR = "radiator"
+
+DEFAULT_VALVE_MIN_OPENING = 0
+DEFAULT_SENSOR_TIMEOUT = 240  # minutes without a report -> fallback
+DEFAULT_ADAPTIVE_FF = True
+# Opening change (percentage points) below which the valve is not re-written.
+VALVE_WRITE_DEADBAND = 3
+# Re-send the current valve position at least every N seconds (lost frames).
+VALVE_REFRESH_INTERVAL = 6 * 3600
+# Re-send the external temperature at least every N seconds.
+EXT_TEMP_REFRESH_INTERVAL = 30 * 60
+
+# Option keys whose change requires re-creating the entities. All other
+# options (gains, hysteresis, ...) are applied live without a reload.
+STRUCTURAL_KEYS = (
+    "valve_entity",
+    "temp_sensor",
+    "room_id",
+    "outside_temp_sensor",
+    "weather_entity",
+    "window_sensors",
+    "window_sensor_scope",
+    "min_temp",
+    "max_temp",
+    "name",
+)
+
 # Fenster-Scope-Werte
 WINDOW_SCOPE_LOCAL = "local"
 WINDOW_SCOPE_ALL = "all"
@@ -49,6 +94,7 @@ WINDOW_SCOPE_ALL = "all"
 # Control modes
 CONTROL_MODE_BINARY = "binary"
 CONTROL_MODE_PID = "pid"  # Renamed/Upgraded from proportional
+CONTROL_MODE_PWM = "pwm"
 # Legacy support
 CONTROL_MODE_PROPORTIONAL = "proportional"
 

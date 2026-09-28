@@ -2,6 +2,13 @@
   "name": "SonClouTRV",
   "content_in_root": false,
   "render_readme": true,
-  "domains": ["climate"],
-  "homeassistant": "2024.1.0"
+  "domains": [
+    "climate",
+    "sensor",
+    "number",
+    "switch",
+    "button",
+    "select"
+  ],
+  "homeassistant": "2024.8.0"
 }
