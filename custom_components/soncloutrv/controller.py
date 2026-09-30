@@ -391,9 +391,14 @@ class RoomController:
         *,
         heating_enabled: bool = True,
         mode: str = CONTROL_MODE_PID,
+        hysteresis: float | None = None,
     ) -> ControllerResult:
-        """Run one control step and return the room demand in percent."""
+        """Run one control step and return the room demand in percent.
+
+        ``hysteresis`` overrides the configured value (binary mode only).
+        """
         s = self.settings
+        hyst = s.hysteresis if hysteresis is None else hysteresis
         profile = s.profile
         temp, slope = self.trend.estimate(now)
 
@@ -448,9 +453,9 @@ class RoomController:
 
         if mode == CONTROL_MODE_BINARY:
             previous_on = bool(self.last_result and self.last_result.demand > 0)
-            if predicted_error > s.hysteresis:
+            if predicted_error > hyst:
                 on = True
-            elif predicted_error < -s.hysteresis:
+            elif predicted_error < -hyst:
                 on = False
             else:
                 on = previous_on

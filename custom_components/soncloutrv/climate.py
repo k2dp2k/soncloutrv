@@ -68,8 +68,11 @@ from .const import (
     ATTR_TRV_INTERNAL_TEMP,
     ATTR_VALVE_ADJUSTMENTS,
     ATTR_VALVE_POSITION,
+    ASSIST_OFF_BELOW,
+    ASSIST_ON_BELOW,
     CONF_ADAPTIVE_FF,
     CONF_CONTROL_MODE,
+    CONF_HEATER_ROLE,
     CONF_HEATING_TYPE,
     CONF_HYSTERESIS,
     CONF_KA,
@@ -106,6 +109,7 @@ from .const import (
     CONTROL_MODE_PWM,
     DEFAULT_ADAPTIVE_FF,
     DEFAULT_CONTROL_MODE,
+    DEFAULT_HEATER_ROLE,
     DEFAULT_HYSTERESIS,
     DEFAULT_MAX_TEMP,
     DEFAULT_MIN_TEMP,
@@ -123,6 +127,9 @@ from .const import (
     EXT_TEMP_REFRESH_INTERVAL_BOSCH,
     TRV_DRIVER_BOSCH,
     TRV_DRIVER_SONOFF,
+    HEATER_ROLE_ASSIST,
+    HEATER_ROLE_AUTO,
+    HEATER_ROLE_PRIMARY,
     HEATING_TYPE_FLOOR,
     HEATING_TYPE_RADIATOR,
     VALVE_OPENING_STEPS,
@@ -166,6 +173,12 @@ EXERCISE_HOLD = 300
 # within this tolerance: sensors that only report on change stay silent in a
 # stable room, which is not a failure.
 STALE_SENSOR_TOLERANCE = 1.0  # K
+# The TRV's own sensor is only usable as a fallback / plausibility reference
+# while its offset to the room sensor is stable. A head that sits on the
+# return pipe (Bosch on a towel radiator) or inside the ClouSet box next to
+# the supply pipe follows the water temperature, not the room; its offset
+# then jumps by several K whenever the valve opens.
+TRV_SENSOR_MAX_DEVIATION = 0.6  # K (mean absolute deviation of the offset)
 # Room CSV log: rotate when the file grows beyond this size.
 ROOM_LOG_MAX_BYTES = 20 * 1024 * 1024
 
@@ -283,6 +296,11 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
         self._pi_demand_entity = f"number.{base}_pi_heating_demand"
         self._remote_temp_entity = f"number.{base}_remote_temperature"
         self._adapt_button_entity = f"button.{base}_valve_adapt_process"
+        self._operating_mode_entity = f"select.{base}_operating_mode"
+        # SONOFF TRVZB: its own open-window detection would close the valve
+        # behind our back; windows are handled here.
+        self._open_window_switch_entity = f"switch.{base}_open_window"
+        self._last_settings_check_ts: float | None = None
         self._driver: str | None = None
         self._local_temp_entity: str | None = None  # resolved in async_added_to_hass
         self._mqtt_topic_base = f"zigbee2mqtt/{base}/set"
@@ -307,6 +325,7 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
         self._room_power_share = DEFAULT_ROOM_POWER_SHARE
         self._sensor_timeout_s = DEFAULT_SENSOR_TIMEOUT * 60
         self._adaptive_ff = DEFAULT_ADAPTIVE_FF
+        self._heater_role = DEFAULT_HEATER_ROLE
         self._pwm_period_s = 3600
         self._window_drop_threshold = DEFAULT_WINDOW_DROP_THRESHOLD
         self._window_stable_band = DEFAULT_WINDOW_STABLE_BAND
@@ -343,6 +362,8 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
         self._temp_source = "sensor"
         self._sensor_stale = False
         self._local_offset: float | None = None
+        self._local_offset_dev: float | None = None  # mean |offset - mean offset|
+        self._valve_resend_count = 0
         self._last_ext_sync_value: float | None = None
         self._last_ext_sync_ts: float | None = None
         self._outside_temperature: float | None = None
@@ -406,6 +427,8 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
             600.0, (_to_float(conf.get(CONF_SENSOR_TIMEOUT), DEFAULT_SENSOR_TIMEOUT) or 0) * 60
         )
         self._adaptive_ff = bool(conf.get(CONF_ADAPTIVE_FF, DEFAULT_ADAPTIVE_FF))
+        role = conf.get(CONF_HEATER_ROLE, DEFAULT_HEATER_ROLE)
+        self._heater_role = role if role in (HEATER_ROLE_AUTO, HEATER_ROLE_PRIMARY, HEATER_ROLE_ASSIST) else DEFAULT_HEATER_ROLE
         pwm_min = _to_float(conf.get(CONF_PWM_PERIOD))
         self._pwm_period_s = int(pwm_min * 60) if pwm_min else profile.pwm_period_s
         self._pwm_period_s = max(600, min(4 * 3600, self._pwm_period_s))
@@ -463,6 +486,7 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
             self._controller = runtime.get_controller(
                 self.hass, self._room_key, self._controller_settings()
             )
+        self._warn_on_room_settings_mismatch()
         self._request_control("options")
 
     @callback
@@ -483,6 +507,7 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
             setattr(self, overrides[key], float(value))
         if self._controller is not None:
             self._controller.apply_settings(self._controller_settings())
+        self._warn_on_room_settings_mismatch()
         self._update_extra_attributes()
         self.async_write_ha_state()
 
@@ -522,6 +547,9 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
             offset = _to_float(last_state.attributes.get("sensor_fallback_offset"))
             if offset is not None and abs(offset) < 5:
                 self._local_offset = offset
+                deviation = _to_float(last_state.attributes.get("sensor_fallback_deviation"))
+                if deviation is not None and 0 <= deviation < 20:
+                    self._local_offset_dev = deviation
 
         # Prime the trend with the current values so the first run has data.
         self._ingest_room_temperature(self.hass.states.get(self._temp_sensor))
@@ -682,7 +710,11 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
             offset = value - local
             if self._local_offset is None:
                 self._local_offset = offset
+                self._local_offset_dev = 0.0
             else:
+                deviation = abs(offset - self._local_offset)
+                dev = self._local_offset_dev if self._local_offset_dev is not None else 0.0
+                self._local_offset_dev = dev + 0.05 * (deviation - dev)
                 self._local_offset += 0.05 * (offset - self._local_offset)
 
     @callback
@@ -751,6 +783,7 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
         if was_unavailable and new_state.state not in (STATE_UNAVAILABLE, STATE_UNKNOWN):
             _LOGGER.info("%s: TRV %s available again - resyncing", self.name, self._valve_entity)
             self._last_ext_sync_ts = None
+            self._last_settings_check_ts = None
             self._request_control("trv_available", force_write=True)
         self._update_extra_attributes()
         self.async_write_ha_state()
@@ -782,9 +815,18 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
     # ------------------------------------------------------------------
     # Temperature source (with fallback)
     # ------------------------------------------------------------------
+    @property
+    def _trv_sensor_trusted(self) -> bool:
+        """True if the TRV sensor tracks the room (stable offset)."""
+        return (
+            self._local_offset is not None
+            and self._local_offset_dev is not None
+            and self._local_offset_dev <= TRV_SENSOR_MAX_DEVIATION
+        )
+
     def _trv_sensor_temperature(self, now: float) -> float | None:
         """Offset corrected temperature of the TRV's own sensor (fallback)."""
-        if not self._local_temp_entity:
+        if not self._local_temp_entity or not self._trv_sensor_trusted:
             return None
         local_state = self.hass.states.get(self._local_temp_entity)
         local = _state_float(local_state)
@@ -854,6 +896,7 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
             return
 
         await self._async_ensure_trv_mode(HVACMode.HEAT)
+        await self._async_ensure_trv_settings(now)
 
         # ----- temperature -----
         temp, source = self._current_room_temperature(now)
@@ -886,11 +929,26 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
         compute_mode = self._control_mode if self._control_mode in (
             CONTROL_MODE_BINARY, CONTROL_MODE_PROPORTIONAL
         ) else CONTROL_MODE_PID
-        if source == "none":
+        assist = self.effective_role == HEATER_ROLE_ASSIST
+        if assist and source != "none":
+            # Two-point on the predicted error, asymmetric around the target:
+            # on below target - ASSIST_ON_BELOW, off above target - ASSIST_OFF_BELOW.
+            centre = (ASSIST_ON_BELOW + ASSIST_OFF_BELOW) / 2
+            result = ctrl.compute(
+                now,
+                target - centre,
+                heating_enabled=True,
+                mode=CONTROL_MODE_BINARY,
+                hysteresis=(ASSIST_ON_BELOW - ASSIST_OFF_BELOW) / 2,
+            )
+            result.reason = "assist"
+            self._last_result = result
+            self._demand = result.demand
+        elif source == "none":
             # No usable temperature: do not learn from a stale trend, hold the
             # learned steady-state demand (integral + weather feed-forward).
             ff = ctrl.feed_forward(target)
-            self._demand = max(0.0, min(60.0, ctrl.integral + ff))
+            self._demand = 0.0 if assist else max(0.0, min(60.0, ctrl.integral + ff))
             self._temp_source = "hold"
             ctrl.last_time = now
         elif (
@@ -919,7 +977,7 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
             share=self._room_power_share,
             min_opening=self._valve_min_opening,
         )
-        if self._control_mode == CONTROL_MODE_BINARY:
+        if self._control_mode == CONTROL_MODE_BINARY or assist:
             opening = self._max_valve_position if self._demand > 0 else 0
         opening = self._apply_post_window_limit(now, opening)
         await self._async_write_valve(opening, force=force_write)
@@ -927,6 +985,45 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
         await self._async_sync_external_temperature()
         await self._async_sync_target_temperature()
         self._log_row(now)
+
+    @callback
+    def _warn_on_room_settings_mismatch(self) -> None:
+        """Circuits of one room share one controller: their tuning must match.
+
+        The last circuit that (re)applied its settings wins silently, so
+        tell the user when e.g. Kp was changed on trv_wohn but not trv_kuche.
+        """
+        mine = self._controller_settings()
+        for other in runtime.room_climates(self.hass, self._room_key):
+            if other is self or other._heating_type != self._heating_type:
+                continue
+            if other._controller_settings() != mine:
+                _LOGGER.warning(
+                    "%s and %s share the room controller '%s' but have different tuning "
+                    "(Kp/Ki/Kd/Ka, hysteresis, horizon): the values of the circuit changed "
+                    "last are used for both. Set them identically on both circuits.",
+                    self.name,
+                    other.name,
+                    self._room_key,
+                )
+                return
+
+    @property
+    def effective_role(self) -> str:
+        """primary or assist.
+
+        auto: a radiator in a room that also has a floor loop assists; the
+        slow floor carries the base load and learns the demand, the radiator
+        only catches fast dips (shower, door) so it does not take over.
+        """
+        if self._heater_role != HEATER_ROLE_AUTO:
+            return self._heater_role
+        if self._heating_type != HEATING_TYPE_RADIATOR:
+            return HEATER_ROLE_PRIMARY
+        for other in runtime.room_climates(self.hass, self._room_key):
+            if other is not self and other._heating_type == HEATING_TYPE_FLOOR:
+                return HEATER_ROLE_ASSIST
+        return HEATER_ROLE_PRIMARY
 
     @callback
     def _room_all_off(self) -> bool:
@@ -1140,12 +1237,24 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
             elif self._last_write_ts is None or now - self._last_write_ts >= VALVE_REFRESH_INTERVAL:
                 should_write = True
             elif self._valve_mismatch_count >= 2:
-                _LOGGER.info(
-                    "%s: TRV reports %s%% but %s%% was commanded - re-sending",
-                    self.name,
-                    self._reported_opening,
-                    last,
-                )
+                self._valve_resend_count += 1
+                if self._valve_resend_count in (5, 50, 500):
+                    _LOGGER.warning(
+                        "%s: the TRV keeps changing the valve position on its own "
+                        "(%s re-sends so far, reports %s%% instead of %s%%). Its internal "
+                        "regulation seems to override the commanded position.",
+                        self.name,
+                        self._valve_resend_count,
+                        self._reported_opening,
+                        last,
+                    )
+                else:
+                    _LOGGER.info(
+                        "%s: TRV reports %s%% but %s%% was commanded - re-sending",
+                        self.name,
+                        self._reported_opening,
+                        last,
+                    )
                 should_write = True
         if not should_write:
             # keep the commanded value stable for the attributes
@@ -1196,10 +1305,39 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
             "climate", "set_hvac_mode", {"entity_id": self._valve_entity, "hvac_mode": mode}
         )
 
+    async def _async_ensure_trv_settings(self, now: float) -> None:
+        """Keep device settings that would fight this controller switched off.
+
+        Checked once per hour and whenever the TRV comes back. Only settings
+        the TRV exposes are touched, and only when they are wrong.
+        """
+        if self._last_settings_check_ts is not None and now - self._last_settings_check_ts < 3600:
+            return
+        if not self._trv_available():
+            return
+        self._last_settings_check_ts = now
+        if self.trv_driver == TRV_DRIVER_BOSCH:
+            # "schedule" lets the TRV change its set-point on its own and
+            # "pause" is frost protection - both override the heating demand.
+            state = self.hass.states.get(self._operating_mode_entity)
+            if state is not None and state.state in ("schedule", "pause"):
+                _LOGGER.info("%s: Bosch operating mode %s -> manual", self.name, state.state)
+                await self._async_call(
+                    "select", "select_option", {"entity_id": self._operating_mode_entity, "option": "manual"}
+                )
+            return
+        state = self.hass.states.get(self._open_window_switch_entity)
+        if state is not None and state.state == "on":
+            _LOGGER.info("%s: switching the TRV's own open-window detection off", self.name)
+            await self._async_call("switch", "turn_off", {"entity_id": self._open_window_switch_entity})
+
     async def _async_sync_external_temperature(self) -> None:
         """Send the room temperature to the TRV (external sensor input)."""
         temp = self._attr_current_temperature
-        if temp is None or self._temp_source not in ("sensor", "trv_sensor"):
+        # "hold" (no usable sensor) still re-sends the last known value: the
+        # Bosch would otherwise fall back to its own sensor on the return pipe
+        # and regulate on the water temperature.
+        if temp is None or self._temp_source not in ("sensor", "trv_sensor", "hold"):
             return
         if not self._trv_available():
             return
@@ -1261,6 +1399,10 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
         "max_valve_position", "outside_temp", "hvac_mode", "kp", "ki", "kd", "ka",
         "pid_p", "pid_i", "pid_d", "pid_ff", "ff_learned", "learning",
         "no_heat_supply", "window_freeze_active", "post_window_soft_active",
+        # v2.2: the TRV's own sensor sits next to the pipe (ClouSet box /
+        # return of a radiator) and rises when water flows - together with the
+        # opening this shows at which opening the valve actually passes water.
+        "trv_local_temp", "valve_reported_percent", "trv_sensor_trusted",
     ]
 
     @callback
@@ -1296,6 +1438,9 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
             int(bool(ctrl and ctrl.no_heat_supply)),
             int(self._window_freeze_active),
             int(self._post_window_soft_mode_until is not None),
+            self._trv_internal_temp,
+            self._reported_opening,
+            int(self._trv_sensor_trusted),
         ]
         self.hass.async_add_executor_job(self._append_log_row, self._room_log_path, row)
 
@@ -1310,8 +1455,9 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
                 with open(path, newline="", encoding="utf-8") as handle:
                     first = handle.readline().strip()
                 if first != ",".join(cls._LOG_HEADER):
-                    # Old format (v1.x): keep it, start a new file.
-                    os.replace(path, path + ".v1.bak")
+                    # Older column layout: keep it, start a new file.
+                    stamp = dt_util.now().strftime("%Y%m%d-%H%M%S")
+                    os.replace(path, f"{path}.{stamp}.bak")
                 elif os.path.getsize(path) > ROOM_LOG_MAX_BYTES:
                     # Rotate once so the log cannot fill the disk over a
                     # winter (7 circuits x 96 rows/day ~ 50 MB per season).
@@ -1347,10 +1493,12 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
             "valve_reported_opening": self._reported_opening,
             ATTR_CONTROL_MODE: self._control_mode,
             "heating_type": self._heating_type,
+            "heater_role": self.effective_role,
             ATTR_TIME_CONTROL: False,
             ATTR_LAST_VALVE_UPDATE: self._last_valve_update.isoformat() if self._last_valve_update else None,
             ATTR_VALVE_ADJUSTMENTS: self._valve_adjustments_count,
             "valve_write_errors": self._valve_write_errors,
+            "valve_resend_count": self._valve_resend_count,
             "hysteresis": self._hysteresis,
             "min_valve_update_interval": self._min_valve_update_interval,
             "prediction_horizon_min": round(self._horizon_s / 60),
@@ -1372,6 +1520,8 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
             "temperature_source": self._temp_source,
             "sensor_stale": self._sensor_stale,
             "sensor_fallback_offset": None if self._local_offset is None else round(self._local_offset, 2),
+            "sensor_fallback_deviation": None if self._local_offset_dev is None else round(self._local_offset_dev, 2),
+            "trv_sensor_trusted": self._trv_sensor_trusted,
             "outside_temperature": self._outside_temperature,
             "next_update": self._next_update_time.isoformat() if self._next_update_time else None,
             "is_exercising": self._is_exercising,
@@ -1546,6 +1696,7 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
             "room_key": self._room_key,
             "trv_type": self.trv_driver,
             "heating_type": self._heating_type,
+            "heater_role": self.effective_role,
             "control_mode": self._control_mode,
             "gains": {"kp": self._kp, "ki": self._ki, "kd": self._kd, "ka": self._ka},
             "horizon_s": self._horizon_s,
@@ -1559,6 +1710,9 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
             "sensor_stale": self._sensor_stale,
             "local_temp_entity": self._local_temp_entity,
             "local_offset": self._local_offset,
+            "local_offset_deviation": self._local_offset_dev,
+            "trv_sensor_trusted": self._trv_sensor_trusted,
+            "valve_resend_count": self._valve_resend_count,
             "window_freeze_active": self._window_freeze_active,
             "controller": None if ctrl is None else {
                 **ctrl.as_dict(),
