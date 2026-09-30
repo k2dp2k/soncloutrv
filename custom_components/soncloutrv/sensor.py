@@ -17,10 +17,10 @@ from homeassistant.const import (
     UnitOfTime,
     UnitOfEnergy,
 )
-from homeassistant.core import HomeAssistant, callback
+from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.event import async_track_state_change_event, async_track_time_interval
-from homeassistant.helpers.entity import DeviceInfo
+from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.restore_state import RestoreEntity
 from homeassistant.helpers import entity_registry as er
 from homeassistant.util import dt as dt_util
@@ -33,7 +33,11 @@ _LOGGER = logging.getLogger(__name__)
 
 # Constants for calculations
 HEATING_POWER_PER_PERCENT = 0.05  # kW per valve % (adjustable estimate)
-SCAN_INTERVAL = timedelta(minutes=1)  # Update statistics every minute
+# Accumulating statistics (heating duration, energy, runtime) are integrated
+# on every valve change and additionally on this interval. Floor heating
+# moves the valve every 15 min at most, so 5 min keeps the values current
+# while writing ~5x fewer recorder rows than the former 1 min tick.
+SCAN_INTERVAL = timedelta(minutes=5)
 
 
 async def async_setup_entry(
@@ -316,7 +320,6 @@ class SonClouTRVProxySensor(SensorEntity):
         if self._remove_listener:
             self._remove_listener()
 
-    @callback
     async def _async_source_changed(self, event) -> None:
         """Handle source entity state changes."""
         await self._async_update_from_source()
@@ -415,7 +418,6 @@ class SonClouTRVNativeValvePositionSensor(SensorEntity):
         if self._remove_listener:
             self._remove_listener()
 
-    @callback
     async def _async_climate_changed(self, event) -> None:
         """Handle climate entity state changes."""
         await self._async_update_from_climate()
@@ -528,7 +530,6 @@ class SonClouTRVNativeValveClosingSensor(SensorEntity):
         if self._remove_listener:
             self._remove_listener()
 
-    @callback
     async def _async_climate_changed(self, event) -> None:
         """Handle climate entity state changes."""
         await self._async_update_from_climate()
@@ -642,7 +643,6 @@ class SonClouTRVWindowStateSensor(SensorEntity):
         if self._remove_listener:
             self._remove_listener()
 
-    @callback
     async def _async_climate_changed(self, event) -> None:
         """Handle climate entity state changes."""
         await self._async_update_from_climate()
@@ -727,7 +727,6 @@ class SonClouTRVRoomTemperatureSensor(SensorEntity):
         if self._remove_listener:
             self._remove_listener()
 
-    @callback
     async def _async_source_changed(self, event) -> None:
         await self._async_update_from_source()
         self.async_write_ha_state()
@@ -818,7 +817,6 @@ class SonClouTRVRoomPIDSensor(SensorEntity):
         if self._remove_listener:
             self._remove_listener()
 
-    @callback
     async def _async_climate_changed(self, event) -> None:
         """Handle climate entity state changes."""
         await self._async_update_from_room_state()
@@ -926,7 +924,7 @@ class SonClouTRVHeatingDurationSensor(RestoreEntity, SensorEntity):
                 self._duration_seconds = value * 3600
         self._attr_native_value = round(self._duration_seconds / 3600, 2)
         self.async_on_remove(async_track_state_change_event(self.hass, [self._valve_entity], self._update))
-        self.async_on_remove(async_track_time_interval(self.hass, self._tick, timedelta(minutes=1)))
+        self.async_on_remove(async_track_time_interval(self.hass, self._tick, SCAN_INTERVAL))
         await self._update()
 
     async def _tick(self, now=None):
@@ -1017,7 +1015,6 @@ class SonClouTRVEfficiencySensor(SensorEntity):
         if hasattr(self, '_remove_listener'): self._remove_listener()
         if hasattr(self, '_remove_interval'): self._remove_interval()
 
-    @callback
     async def _track(self, event):
         state = self.hass.states.get(self._climate_entity)
         if state:
@@ -1182,7 +1179,6 @@ class SonClouTRVTemperatureTrendSensor(SensorEntity):
         if hasattr(self, '_remove_listener'): self._remove_listener()
         if hasattr(self, '_remove_interval'): self._remove_interval()
 
-    @callback
     async def _track(self, event):
         state = self.hass.states.get(self._climate_entity)
         if state:
@@ -1233,7 +1229,6 @@ class SonClouTRVAvgTemperatureSensor(RestoreEntity, SensorEntity):
         if hasattr(self, '_remove_listener'): self._remove_listener()
         if hasattr(self, '_remove_interval'): self._remove_interval()
 
-    @callback
     async def _track(self, event):
         state = self.hass.states.get(self._climate_entity)
         if state:
@@ -1279,7 +1274,6 @@ class SonClouTRVMinMaxTemperatureSensor(RestoreEntity, SensorEntity):
         if hasattr(self, '_remove_listener'): self._remove_listener()
         if hasattr(self, '_remove_interval'): self._remove_interval()
 
-    @callback
     async def _track(self, event):
         state = self.hass.states.get(self._climate_entity)
         if state:
@@ -1326,7 +1320,6 @@ class SonClouTRVTimeToTargetSensor(SensorEntity):
         if hasattr(self, '_remove_listener'): self._remove_listener()
         if hasattr(self, '_remove_interval'): self._remove_interval()
 
-    @callback
     async def _track(self, event):
         state = self.hass.states.get(self._climate_entity)
         if state:
@@ -1376,7 +1369,6 @@ class SonClouTRVOverheatWarningSensor(SensorEntity):
     async def async_will_remove_from_hass(self):
         if hasattr(self, '_remove_listener'): self._remove_listener()
 
-    @callback
     async def _check(self, event=None):
         state = self.hass.states.get(self._climate_entity)
         if not state: return
@@ -1414,7 +1406,6 @@ class SonClouTRVUnderheatWarningSensor(SensorEntity):
         if hasattr(self, '_remove_listener'): self._remove_listener()
         if hasattr(self, '_remove_interval'): self._remove_interval()
 
-    @callback
     async def _check(self, event=None):
         climate = self.hass.states.get(self._climate_entity)
         valve = self.hass.states.get(self._valve_entity)
@@ -1423,7 +1414,8 @@ class SonClouTRVUnderheatWarningSensor(SensorEntity):
         target = climate.attributes.get("temperature")
         try:
             pos = float(valve.state)
-        except: return
+        except (TypeError, ValueError):
+            return
         if current is None or target is None: return
         self._history.append(float(current))
         if pos > 80 and current < target - 1 and len(self._history) >= 5:
@@ -1458,7 +1450,6 @@ class SonClouTRVConnectionStatusSensor(SensorEntity):
         if hasattr(self, '_remove_listener'): self._remove_listener()
         if hasattr(self, '_remove_interval'): self._remove_interval()
 
-    @callback
     async def _check(self, event=None):
         state = self.hass.states.get(self._valve_entity)
         if not state or state.state in ("unavailable", "unknown"):
@@ -1488,7 +1479,6 @@ class SonClouTRVLastUpdateSensor(SensorEntity):
     async def async_will_remove_from_hass(self):
         if hasattr(self, '_remove_listener'): self._remove_listener()
 
-    @callback
     async def _update(self, event):
         if (state := event.data.get("new_state")) and state.state not in ("unavailable", "unknown"):
             self._attr_native_value = dt_util.now()
@@ -1521,7 +1511,6 @@ class SonClouTRVBatteryStatusSensor(SensorEntity):
     async def async_will_remove_from_hass(self):
         if hasattr(self, '_remove_listener'): self._remove_listener()
 
-    @callback
     async def _update(self, event=None):
         if not self._battery_entity:
             return
@@ -1572,7 +1561,6 @@ class SonClouTRVPIDSensor(SensorEntity):
     async def async_will_remove_from_hass(self):
         if hasattr(self, '_remove_listener'): self._remove_listener()
 
-    @callback
     async def _update(self, event=None):
         state = self.hass.states.get(self._climate_entity)
         if not state: return

@@ -161,6 +161,13 @@ POST_WINDOW_MAX_STEP = 10
 MIN_COMPUTE_SPACING = 60
 # Exercise timing
 EXERCISE_HOLD = 300
+# A room sensor that has not reported for longer than the sensor timeout is
+# still trusted as long as the TRV's own (offset corrected) sensor agrees
+# within this tolerance: sensors that only report on change stay silent in a
+# stable room, which is not a failure.
+STALE_SENSOR_TOLERANCE = 1.0  # K
+# Room CSV log: rotate when the file grows beyond this size.
+ROOM_LOG_MAX_BYTES = 20 * 1024 * 1024
 
 
 def _to_float(value: Any, default: float | None = None) -> float | None:
@@ -283,6 +290,7 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
         self._attr_min_temp = float(conf.get(CONF_MIN_TEMP, DEFAULT_MIN_TEMP))
         self._attr_max_temp = float(conf.get(CONF_MAX_TEMP, DEFAULT_MAX_TEMP))
         self._attr_target_temperature = float(conf.get(CONF_TARGET_TEMP, DEFAULT_TARGET_TEMP))
+        self._configured_target = self._attr_target_temperature
         self._attr_hvac_mode = HVACMode.HEAT
         self._attr_current_temperature: float | None = None
 
@@ -333,6 +341,7 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
         self._started = False
         self._removed = False
         self._temp_source = "sensor"
+        self._sensor_stale = False
         self._local_offset: float | None = None
         self._last_ext_sync_value: float | None = None
         self._last_ext_sync_ts: float | None = None
@@ -440,6 +449,16 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
     def async_options_updated(self) -> None:
         """Apply non-structural option changes live."""
         self._load_settings()
+        # A target temperature entered in the options dialog is applied like a
+        # set_temperature call (the thermostat card / automations still win
+        # afterwards, so the restored value is not overwritten on reload).
+        conf = {**self._entry.data, **self._entry.options}
+        configured = _to_float(conf.get(CONF_TARGET_TEMP))
+        if configured is not None and configured != self._configured_target:
+            self._configured_target = configured
+            self._attr_target_temperature = min(
+                self._attr_max_temp, max(self._attr_min_temp, configured)
+            )
         if self._controller is not None:
             self._controller = runtime.get_controller(
                 self.hass, self._room_key, self._controller_settings()
@@ -491,7 +510,12 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
             if last_state.state in (HVACMode.HEAT, HVACMode.OFF):
                 self._attr_hvac_mode = HVACMode(last_state.state)
             restored_target = _to_float(last_state.attributes.get(ATTR_TEMPERATURE))
-            if restored_target is not None:
+            restored_configured = _to_float(last_state.attributes.get("configured_target_temperature"))
+            if restored_configured is not None and restored_configured != self._configured_target:
+                # The target in the options changed while the entity was not
+                # running (options dialog + reload): the new option wins.
+                pass
+            elif restored_target is not None:
                 self._attr_target_temperature = min(
                     self._attr_max_temp, max(self._attr_min_temp, restored_target)
                 )
@@ -537,6 +561,10 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
         @callback
         def _start(_hass: HomeAssistant) -> None:
             self._started = True
+            # A window that was already open before the (re)start never
+            # produces a state change event - check the sensors now.
+            if self._any_window_open():
+                self.hass.async_create_task(self._async_start_window_freeze(by_sensor=True))
             self._schedule_next(stagger)
 
         self.async_on_remove(async_at_started(self.hass, _start))
@@ -754,17 +782,39 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
     # ------------------------------------------------------------------
     # Temperature source (with fallback)
     # ------------------------------------------------------------------
+    def _trv_sensor_temperature(self, now: float) -> float | None:
+        """Offset corrected temperature of the TRV's own sensor (fallback)."""
+        if not self._local_temp_entity:
+            return None
+        local_state = self.hass.states.get(self._local_temp_entity)
+        local = _state_float(local_state)
+        if local is None or local_state is None:
+            return None
+        if now - _reported_ts(local_state) > self._sensor_timeout_s:
+            return None
+        return local + (self._local_offset or 0.0)
+
     def _current_room_temperature(self, now: float) -> tuple[float | None, str]:
-        """Return the room temperature to control on and its source."""
+        """Return the room temperature to control on and its source.
+
+        Order: room sensor (fresh) -> room sensor (silent but plausible) ->
+        TRV sensor with learned offset -> nothing.
+        """
         state = self.hass.states.get(self._temp_sensor)
         value = _state_float(state)
-        if value is not None and state is not None and now - _reported_ts(state) <= self._sensor_timeout_s:
-            return value, "sensor"
-        if self._local_temp_entity:
-            local_state = self.hass.states.get(self._local_temp_entity)
-            local = _state_float(local_state)
-            if local is not None and local_state is not None and now - _reported_ts(local_state) <= self._sensor_timeout_s:
-                return local + (self._local_offset or 0.0), "trv_sensor"
+        self._sensor_stale = False
+        fallback = self._trv_sensor_temperature(now)
+        if value is not None and state is not None:
+            if now - _reported_ts(state) <= self._sensor_timeout_s:
+                return value, "sensor"
+            # No report for a long time. Many sensors only report on change
+            # (0.1 K steps), so a silent sensor in a stable room is normal.
+            # Only distrust it when the TRV sensor says the room moved.
+            self._sensor_stale = True
+            if fallback is None or abs(fallback - value) <= STALE_SENSOR_TOLERANCE:
+                return value, "sensor"
+        if fallback is not None:
+            return fallback, "trv_sensor"
         return None, "none"
 
     # ------------------------------------------------------------------
@@ -815,6 +865,9 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
             self._attr_current_temperature = temp
 
         # ----- window -----
+        if not self._window_freeze_active and self._any_window_open():
+            # Missed event (restart, Zigbee hiccup): the sensors are the truth.
+            await self._async_start_window_freeze(by_sensor=True)
         if self._window_freeze_active:
             if self._is_window_freeze_over(now):
                 await self._async_end_window_freeze()
@@ -1256,11 +1309,15 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
             if os.path.isfile(path):
                 with open(path, newline="", encoding="utf-8") as handle:
                     first = handle.readline().strip()
-                if first == ",".join(cls._LOG_HEADER):
-                    write_header = False
-                else:
+                if first != ",".join(cls._LOG_HEADER):
                     # Old format (v1.x): keep it, start a new file.
                     os.replace(path, path + ".v1.bak")
+                elif os.path.getsize(path) > ROOM_LOG_MAX_BYTES:
+                    # Rotate once so the log cannot fill the disk over a
+                    # winter (7 circuits x 96 rows/day ~ 50 MB per season).
+                    os.replace(path, path + ".1")
+                else:
+                    write_header = False
             with open(path, "a", newline="", encoding="utf-8") as handle:
                 writer = csv.writer(handle)
                 if write_header:
@@ -1298,6 +1355,7 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
             "min_valve_update_interval": self._min_valve_update_interval,
             "prediction_horizon_min": round(self._horizon_s / 60),
             "room_key": self._room_key,
+            "configured_target_temperature": self._configured_target,
             "trv_type": self.trv_driver,
             "room_demand": round(self._demand, 1),
             ATTR_PID_P: round(r.p, 1) if r else 0.0,
@@ -1312,6 +1370,7 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
             "learning": bool(r and r.learning),
             "no_heat_supply": bool(ctrl and ctrl.no_heat_supply),
             "temperature_source": self._temp_source,
+            "sensor_stale": self._sensor_stale,
             "sensor_fallback_offset": None if self._local_offset is None else round(self._local_offset, 2),
             "outside_temperature": self._outside_temperature,
             "next_update": self._next_update_time.isoformat() if self._next_update_time else None,
@@ -1497,6 +1556,7 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
             "reported_opening": self._reported_opening,
             "valve_write_errors": self._valve_write_errors,
             "temperature_source": self._temp_source,
+            "sensor_stale": self._sensor_stale,
             "local_temp_entity": self._local_temp_entity,
             "local_offset": self._local_offset,
             "window_freeze_active": self._window_freeze_active,

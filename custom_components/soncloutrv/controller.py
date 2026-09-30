@@ -111,6 +111,15 @@ def get_profile(heating_type: str | None) -> HeatingProfile:
     return PROFILES.get(heating_type or HEATING_TYPE_FLOOR, PROFILES[HEATING_TYPE_FLOOR])
 
 
+# Bounds of the learned integral (% demand). The upper bound is the actuator
+# range. A negative integral means "the room has heat gains the feed-forward
+# does not know about"; -25 % is plenty for that. Anything lower would only
+# be reached during long over-temperature phases (summer, strong sun) and
+# then delay the heat-up in autumn by hours.
+INTEGRAL_MIN = -25.0
+INTEGRAL_MAX = 100.0
+
+
 # Gains that earlier versions wrote into the options as defaults. When the
 # stored gains match one of these sets they were never tuned by the user and
 # are replaced by the profile defaults during migration.
@@ -340,7 +349,7 @@ class RoomController:
         if not data:
             return
         try:
-            self.integral = clamp(float(data.get("integral", 0.0)), -50.0, 100.0)
+            self.integral = clamp(float(data.get("integral", 0.0)), INTEGRAL_MIN, INTEGRAL_MAX)
         except (TypeError, ValueError):
             self.integral = 0.0
         coeff = data.get("ff_coeff")
@@ -470,6 +479,11 @@ class RoomController:
 
         unclamped = p_term + self.integral + d_term + ff_term
 
+        # Hard over-temperature cut-off (also in PID mode) so a strong sun
+        # gain closes the valve even if the integral is high.
+        overtemp_limit = max(0.5, 2.0 * s.hysteresis)
+        cut_off = error < -overtemp_limit and predicted_error < -overtemp_limit
+
         learning = False
         can_learn = heating_enabled and not self.frozen and 0 < dt <= 3 * profile.interval_s
         # Conditional integration: learn freely close to the set-point. Further
@@ -482,21 +496,24 @@ class RoomController:
             # Anti-windup: do not integrate further into a saturated output.
             pushing_up = error > 0 and unclamped >= 100.0
             pushing_down = error < 0 and unclamped <= 0.0
+            # While the valve is shut by the cut-off there is nothing left to
+            # unlearn once the integral is at or below zero (summer, long sunny
+            # phases): a further negative integral would only delay the next
+            # heat-up.
+            if cut_off and error < 0 and self.integral <= 0.0:
+                pushing_down = True
             if not (pushing_up or pushing_down):
                 rate = 1.0 if in_band else 0.5
                 self.integral += s.ki * error * dt * rate
                 learning = True
         # The integral alone may never exceed the actuator range.
-        self.integral = clamp(self.integral, -50.0, 100.0)
+        self.integral = clamp(self.integral, INTEGRAL_MIN, INTEGRAL_MAX)
 
         demand_unclamped = p_term + self.integral + d_term + ff_term
         demand = clamp(demand_unclamped, 0.0, 100.0)
 
-        # Hard over-temperature cut-off (also in PID mode) so a strong sun
-        # gain closes the valve even if the integral is high.
-        overtemp_limit = max(0.5, 2.0 * s.hysteresis)
         reason = "pid"
-        if error < -overtemp_limit and predicted_error < -overtemp_limit:
+        if cut_off:
             demand = 0.0
             reason = "over_temperature"
 
@@ -566,7 +583,7 @@ class RoomController:
             new_coeff = self.ff_coeff + alpha * (observed - self.ff_coeff)
         new_ff = new_coeff * delta
         # Bumpless: move the same amount out of the integral.
-        self.integral = clamp(self.integral - (new_ff - ff_term), -50.0, 100.0)
+        self.integral = clamp(self.integral - (new_ff - ff_term), INTEGRAL_MIN, INTEGRAL_MAX)
         self.ff_coeff = new_coeff
 
 
