@@ -510,7 +510,12 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
             if last_state.state in (HVACMode.HEAT, HVACMode.OFF):
                 self._attr_hvac_mode = HVACMode(last_state.state)
             restored_target = _to_float(last_state.attributes.get(ATTR_TEMPERATURE))
-            if restored_target is not None:
+            restored_configured = _to_float(last_state.attributes.get("configured_target_temperature"))
+            if restored_configured is not None and restored_configured != self._configured_target:
+                # The target in the options changed while the entity was not
+                # running (options dialog + reload): the new option wins.
+                pass
+            elif restored_target is not None:
                 self._attr_target_temperature = min(
                     self._attr_max_temp, max(self._attr_min_temp, restored_target)
                 )
@@ -1350,6 +1355,7 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
             "min_valve_update_interval": self._min_valve_update_interval,
             "prediction_horizon_min": round(self._horizon_s / 60),
             "room_key": self._room_key,
+            "configured_target_temperature": self._configured_target,
             "trv_type": self.trv_driver,
             "room_demand": round(self._demand, 1),
             ATTR_PID_P: round(r.p, 1) if r else 0.0,

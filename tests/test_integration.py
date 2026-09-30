@@ -301,7 +301,10 @@ async def test_window_open_before_start_is_respected(hass: HomeAssistant, mqtt_m
     await _run_cycle(hass)
     state = hass.states.get("climate.trv_wohn")
     assert state.attributes["window_open"] is True
-    assert trv.last("number", "set_value", OPEN)["value"] == 0
+    assert state.attributes["valve_position"] == 0
+    # the freeze may have written 0 before the fake TRV was installed; in no
+    # case is a positive opening written
+    assert all(c[2]["value"] == 0 for c in trv.calls if c[2].get("entity_id") == OPEN)
     hass.states.async_set(WINDOW, "off", {"device_class": "window"})
     await hass.async_block_till_done()
     assert hass.states.get("climate.trv_wohn").attributes["window_open"] is False
@@ -359,6 +362,21 @@ async def test_target_from_options_is_applied_live(hass: HomeAssistant, mqtt_moc
     await hass.async_block_till_done()
     assert runtime.climate_for_entry(hass, ENTRY_ID) is climate  # no reload
     assert climate.target_temperature == 20.0
+    # a target changed in the options together with a structural change
+    # (reload) wins over the restored state
+    await climate.async_set_temperature(temperature=21.0)
+    hass.states.async_set("sensor.other", "20.0", {"device_class": "temperature"})
+    hass.config_entries.async_update_entry(
+        entry, options={**entry.options, "target_temp": 19.0, "temp_sensor": "sensor.other"}
+    )
+    await hass.async_block_till_done()
+    climate = runtime.climate_for_entry(hass, ENTRY_ID)
+    assert climate.target_temperature == 19.0
+    # a plain reload keeps the value set by the user
+    await climate.async_set_temperature(temperature=22.5)
+    assert await hass.config_entries.async_reload(entry.entry_id)
+    await hass.async_block_till_done()
+    assert runtime.climate_for_entry(hass, ENTRY_ID).target_temperature == 22.5
     # unrelated option changes do not touch a target set by the user meanwhile
     await climate.async_set_temperature(temperature=22.0)
     hass.config_entries.async_update_entry(entry, options={**entry.options, "kp": 30.0})

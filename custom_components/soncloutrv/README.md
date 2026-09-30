@@ -215,7 +215,8 @@ Beide über Zigbee2MQTT.
 
 ## ❄️ Betrieb im Winter (ohne manuelle Eingriffe)
 
-- **Saisonschalter**: Alle Thermostate auf `heat` (z. B. per Automation aus einem `input_select`), im Sommer auf `off`. Mehr ist nicht nötig: Sollwerte, Fenster, Sensorausfälle, TRV-Neustarts und der Verkalkungsschutz werden von der Integration behandelt.
+- **Saisonschalter**: Alle Thermostate auf `heat` (z. B. per Automation aus einem `input_select`), im Sommer auf `off`. Mehr ist nicht nötig: Sollwerte, Fenster, Sensorausfälle, TRV-Neustarts und der Verkalkungsschutz werden von der Integration behandelt. Vollautomatisch: Statistik-Helfer „3-Tage-Mittel“ auf die Außentemperatur, Automation mit `numeric_state` unter 15 °C (1 h) → Winter, über 18 °C (24 h) → Sommer.
+- **Mehrere Heizungstypen im Raum** (Fußboden + Handtuchheizkörper): dem schnellen Heizkörper 1 K weniger Sollwert geben, sonst erreicht er das Ziel zuerst und der Fußboden lernt nie seinen Grundbedarf.
 - **Fenster**: Sensoren werden beim Start und in jedem Regelzyklus geprüft. Ein Fenster, das beim HA-Neustart bereits offen war, oder ein verpasstes Zigbee-Ereignis führt nicht zu Heizen bei offenem Fenster.
 - **Raumsensor stumm**: Viele Sensoren melden nur bei Änderung (0,1 K). Bleibt der Sensor länger als „Sensor-Ausfall nach“ still, wird er weiter verwendet, solange der TRV-eigene Sensor (offsetkorrigiert) innerhalb von 1 K zustimmt (Attribut `sensor_stale`). Erst bei Abweichung oder `unavailable` übernimmt der TRV-Sensor, ohne Sensor der gelernte Grundbedarf.
 - **Außensensor**: Nicht in die Sonne hängen, sonst bricht die Wettervorsteuerung an sonnigen Nachmittagen ein (der Wert wird 2 h tiefpassgefiltert, das fängt kurze Spitzen ab, keine Stunden).
@@ -253,6 +254,8 @@ Kein Neuanlegen, keine Migration: Config-Version bleibt 4, alle Entity-IDs und L
 - **Zieltemperatur aus dem Optionsdialog** wirkt sofort, ohne Neuladen.
 - **Außentemperatur**: Wetter-Entitäten werden im Einrichtungsdialog wieder angeboten.
 - **Speicher/SD-Karte**: Lernwerte werden alle 30 min statt alle 2 min gespeichert (Abschluss-Schreiben beim Beenden bleibt). Raum-CSV rotiert bei 20 MB nach `.1`.
+- **Zieltemperatur und Neuladen**: Wird die Zieltemperatur im Optionsdialog zusammen mit einer strukturellen Änderung (Neuladen) geändert, gewinnt der neue Wert; ein reines Neuladen behält den vom Nutzer gesetzten Wert (Attribut `configured_target_temperature`).
+- **Recorder-Entlastung**: Heizdauer, Heizenergie und Ventil-Gesamtlaufzeit werden alle 5 min statt jede Minute fortgeschrieben (rund 5× weniger Datenbankzeilen im Winter), Ventiländerungen werden weiterhin sofort erfasst.
 - Tests: 36 automatische Tests (Fenster beim Start, verpasstes Ereignis, stummer Sensor, Optionen live, Log-Rotation, I-Anteil-Grenze).
 
 ### v2.1.0 (2026-09-28) – Bosch Heizkörper-Thermostat II
