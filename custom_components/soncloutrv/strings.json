@@ -51,6 +51,7 @@
           "valve_opening_step": "Maximale Ventilöffnung (Stufe)",
           "sensor_timeout": "Sensor-Ausfall nach (min)",
           "adaptive_feed_forward": "Wettervorsteuerung automatisch lernen",
+          "heater_role": "Rolle im Raum",
           "room_logging_enabled": "CSV-Logging",
           "room_log_file": "CSV-Datei"
         }

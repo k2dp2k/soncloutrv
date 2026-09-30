@@ -51,7 +51,12 @@ from .const import (
     CONF_HEATING_TYPE,
     CONF_SENSOR_TIMEOUT,
     CONF_ADAPTIVE_FF,
+    CONF_HEATER_ROLE,
     CONF_PWM_PERIOD,
+    DEFAULT_HEATER_ROLE,
+    HEATER_ROLE_ASSIST,
+    HEATER_ROLE_AUTO,
+    HEATER_ROLE_PRIMARY,
     CONTROL_MODE_PID,
     CONTROL_MODE_PWM,
     DEFAULT_SENSOR_TIMEOUT,
@@ -65,6 +70,11 @@ from .controller import get_profile
 HEATING_TYPE_OPTIONS = [
     {"value": HEATING_TYPE_FLOOR, "label": "Flächenheizung / Fußboden (Estrich, träge)"},
     {"value": HEATING_TYPE_RADIATOR, "label": "Heizkörper (schnell)"},
+]
+HEATER_ROLE_OPTIONS = [
+    {"value": HEATER_ROLE_AUTO, "label": "Automatisch (Heizkörper neben Fußboden = Zusatzheizung)"},
+    {"value": HEATER_ROLE_PRIMARY, "label": "Hauptheizung (regelt den Raum)"},
+    {"value": HEATER_ROLE_ASSIST, "label": "Zusatzheizung (springt nur bei Abweichung ein)"},
 ]
 CONTROL_MODE_OPTIONS = [
     {"value": CONTROL_MODE_PID, "label": "PID (vorausschauend, stetig) - empfohlen"},
@@ -379,6 +389,13 @@ class SonClouTRVOptionsFlow(config_entries.OptionsFlow):
                 vol.Required(
                     CONF_ADAPTIVE_FF, default=current.get(CONF_ADAPTIVE_FF, DEFAULT_ADAPTIVE_FF)
                 ): cv.boolean,
+                vol.Required(
+                    CONF_HEATER_ROLE, default=current.get(CONF_HEATER_ROLE, DEFAULT_HEATER_ROLE)
+                ): selector.SelectSelector(
+                    selector.SelectSelectorConfig(
+                        options=HEATER_ROLE_OPTIONS, mode=selector.SelectSelectorMode.DROPDOWN
+                    )
+                ),
                 vol.Required(
                     CONF_ROOM_LOGGING_ENABLED,
                     default=current.get(CONF_ROOM_LOGGING_ENABLED, DEFAULT_ROOM_LOGGING_ENABLED),

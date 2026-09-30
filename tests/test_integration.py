@@ -295,6 +295,20 @@ async def test_window_sensor_closes_and_resumes(hass: HomeAssistant, mqtt_mock) 
     assert climate._controller.integral == pytest.approx(integral_before, abs=0.5)
 
 
+async def test_trv_own_window_detection_is_switched_off(hass: HomeAssistant, mqtt_mock) -> None:
+    hass.states.async_set(f"switch.{BASE}_open_window", "on")
+    switched: list[str] = []
+
+    async def turn_off(call: ServiceCall) -> None:
+        switched.append(call.data["entity_id"])
+        hass.states.async_set(call.data["entity_id"], "off")
+
+    _, trv = await _setup(hass)
+    hass.services.async_register("switch", "turn_off", turn_off)
+    await _run_cycle(hass)
+    assert switched == [f"switch.{BASE}_open_window"]
+
+
 async def test_window_open_before_start_is_respected(hass: HomeAssistant, mqtt_mock) -> None:
     """A window that is already open at (re)start never sends an event."""
     _, trv = await _setup(hass, window="on")
@@ -352,6 +366,94 @@ async def test_silent_sensor_stays_trusted_when_plausible(hass: HomeAssistant, m
     state = hass.states.get("climate.trv_wohn")
     assert state.attributes["temperature_source"] == "sensor"
     assert state.attributes["sensor_stale"] is False
+
+
+async def _setup_bath(hass: HomeAssistant, trv: FakeTRV, *, role: str | None = None) -> tuple[MockConfigEntry, MockConfigEntry, str]:
+    """Floor loop (SONOFF) + towel radiator (Bosch) sharing room 'Bad'."""
+    base = "handtuch_heizung_bad"
+    hass.states.async_set(
+        f"climate.{base}", "off", {"hvac_modes": ["off", "heat", "auto"], "temperature": 5, "current_temperature": 20.5}
+    )
+    hass.states.async_set(f"number.{base}_pi_heating_demand", "0", {"min": 0, "max": 100})
+    hass.states.async_set(f"number.{base}_remote_temperature", "0", {"min": 0, "max": 35})
+    hass.states.async_set(f"sensor.{base}_local_temperature", "20.6", {"device_class": "temperature"})
+    floor = MockConfigEntry(
+        domain=DOMAIN, title="trv_bad", version=CONFIG_VERSION, entry_id="01KXKYXHTQQ1XB0FA9SVA70TY7", unique_id=TRV,
+        data={**V1_DATA, "name": "trv_bad", "room_id": "Bad"},
+        options={**V1_OPTIONS, "room_id": "Bad", "window_sensors": [], "kp": 25.0, "ki": 0.001736},
+    )
+    options = {**V1_OPTIONS, "room_id": "Bad", "heating_type": "radiator", "valve_opening_step": "5", "window_sensors": [],
+               "kp": 25.0, "ki": 0.010417}
+    if role is not None:
+        options["heater_role"] = role
+    towel = MockConfigEntry(
+        domain=DOMAIN, title="trv_handtuch", version=CONFIG_VERSION, entry_id="01KXKZ53FC4NMFSC1YXJMXC9EN",
+        unique_id=f"climate.{base}", data={**V1_DATA, "name": "trv_handtuch", "valve_entity": f"climate.{base}", "room_id": "Bad"},
+        options=options,
+    )
+    for entry in (floor, towel):
+        entry.add_to_hass(hass)
+        assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    trv.install()
+    return floor, towel, base
+
+
+async def test_radiator_next_to_floor_loop_assists_only(hass: HomeAssistant, mqtt_mock) -> None:
+    trv = FakeTRV(hass)
+    trv.setup_states(room=20.5)
+    floor, towel, base = await _setup_bath(hass, trv)
+    await _run_cycle(hass)
+    f = runtime.climate_for_entry(hass, floor.entry_id)
+    t = runtime.climate_for_entry(hass, towel.entry_id)
+    assert f.effective_role == "primary" and t.effective_role == "assist"
+    assert f._controller is not t._controller  # separate learning per heating type
+    # 1 K below target: floor modulates, the radiator switches fully on
+    assert 0 < trv.last("number", "set_value", OPEN)["value"] <= 40
+    assert trv.last("number", "set_value", f"number.{base}_pi_heating_demand")["value"] == 100
+    assert hass.states.get("climate.trv_handtuch").attributes["control_reason"] == "assist"
+    # back within 0.1 K of the target: the radiator goes off, the floor keeps its demand
+    hass.states.async_set(ROOM, "21.45", {"device_class": "temperature"})
+    await hass.async_block_till_done()
+    await _run_cycle(hass, 6)
+    assert trv.last("number", "set_value", f"number.{base}_pi_heating_demand")["value"] == 0
+    assert trv.last("number", "set_value", OPEN)["value"] > 0
+    assert hass.states.get("climate.trv_handtuch").attributes["heater_role"] == "assist"
+    # the assist heater never learns an integral of its own
+    assert t._controller.integral == 0.0
+
+
+async def test_heater_role_can_be_forced_primary(hass: HomeAssistant, mqtt_mock) -> None:
+    trv = FakeTRV(hass)
+    trv.setup_states(room=20.5)
+    _, towel, base = await _setup_bath(hass, trv, role="primary")
+    await _run_cycle(hass)
+    t = runtime.climate_for_entry(hass, towel.entry_id)
+    assert t.effective_role == "primary"
+    demand = trv.last("number", "set_value", f"number.{base}_pi_heating_demand")["value"]
+    assert 0 < demand < 100  # PI, not two-point
+
+
+async def test_unstable_trv_sensor_is_not_used_as_fallback(hass: HomeAssistant, mqtt_mock, freezer) -> None:
+    """A head on the return pipe follows the water, not the room."""
+    _, trv = await _setup(hass)
+    await _run_cycle(hass)
+    climate = runtime.climate_for_entry(hass, ENTRY_ID)
+    assert climate._trv_sensor_trusted is True
+    # the valve opens and closes: the TRV sensor swings by 10 K
+    for i in range(40):
+        hass.states.async_set(LOCAL, "32.0" if i % 2 else "22.0", {"device_class": "temperature"})
+        hass.states.async_set(ROOM, str(20.5 + (i % 3) * 0.1), {"device_class": "temperature"}, force_update=True)
+        await hass.async_block_till_done()
+    assert climate._trv_sensor_trusted is False
+    state = hass.states.get("climate.trv_wohn")
+    assert state.attributes["trv_sensor_trusted"] is False
+    # room sensor dies -> no fallback to the pipe temperature, hold instead
+    hass.states.async_set(ROOM, "unavailable")
+    freezer.tick(timedelta(minutes=16))
+    hass.states.async_set(LOCAL, "32.0", {"device_class": "temperature"}, force_update=True)
+    await _run_cycle(hass, 0.1)
+    assert hass.states.get("climate.trv_wohn").attributes["temperature_source"] == "hold"
 
 
 async def test_target_from_options_is_applied_live(hass: HomeAssistant, mqtt_mock) -> None:
@@ -537,6 +639,16 @@ async def test_two_circuits_share_room_controller(hass: HomeAssistant, mqtt_mock
     assert c1._controller is c2._controller
     assert entry2.options["kp"] == 12.0 and entry2.options["control_mode"] == "pid"
     assert set(runtime.room_climates(hass, "Wohnzimmer")) == {c1, c2}
+    # tuning one circuit only is flagged (the controller is shared)
+    from unittest.mock import patch
+    from custom_components.soncloutrv import climate as climate_module
+
+    with patch.object(climate_module._LOGGER, "warning") as warning:
+        await hass.services.async_call(
+            "number", "set_value", {"entity_id": "number.trv_wohn_pid_p_gain_kp", "value": 30}, blocking=True
+        )
+        await hass.async_block_till_done()
+    assert any("share the room controller" in str(call.args[0]) for call in warning.call_args_list)
     # unloading one circuit keeps the other working
     assert await hass.config_entries.async_unload(entry2.entry_id)
     await hass.async_block_till_done()
@@ -555,6 +667,7 @@ async def test_bosch_bth_ra_driver(hass: HomeAssistant, mqtt_mock, freezer) -> N
     hass.states.async_set(f"number.{base}_remote_temperature", "0", {"min": 0, "max": 35})
     hass.states.async_set(f"sensor.{base}_local_temperature", "23.8", {"device_class": "temperature"})
     hass.states.async_set(f"button.{base}_valve_adapt_process", "unknown")
+    hass.states.async_set(f"select.{base}_operating_mode", "pause", {"options": ["schedule", "manual", "pause"]})
     entry = MockConfigEntry(
         domain=DOMAIN,
         title="trv_handtuch",
@@ -579,6 +692,8 @@ async def test_bosch_bth_ra_driver(hass: HomeAssistant, mqtt_mock, freezer) -> N
     assert climate.trv_driver == "bosch_bth_ra"
     await _run_cycle(hass)
     assert hass.states.get(f"climate.{base}").state == "heat"
+    # the Bosch is taken out of "pause" so it accepts the heating demand
+    assert trv.last("select", "select_option", f"select.{base}_operating_mode")["option"] == "manual"
     demand = trv.last("number", "set_value", f"number.{base}_pi_heating_demand")
     assert demand is not None and 0 < demand["value"] <= 100
     # no SONOFF entities are written for this device

@@ -4,7 +4,7 @@ DOMAIN = "soncloutrv"
 PLATFORMS = ["climate", "sensor", "number", "switch", "button", "select"]
 
 # Integration version (keep in sync with manifest.json)
-VERSION = "2.2.0"
+VERSION = "2.3.0"
 # Config entry schema version. 4 = predictive room controller (v2.0.0)
 CONFIG_VERSION = 4
 # Bump to reset accumulating statistics sensors once (v2.0.0: the old
@@ -58,6 +58,18 @@ CONF_MIN_VALVE_UPDATE_INTERVAL = "min_valve_update_interval"  # minutes
 CONF_SENSOR_TIMEOUT = "sensor_timeout"  # minutes
 CONF_ADAPTIVE_FF = "adaptive_feed_forward"
 CONF_PWM_PERIOD = "pwm_period"  # minutes
+# v2.3: role of a circuit in its room. "assist" = supplementary heater
+# (towel radiator in a floor heated bathroom): two-point on the predicted
+# error, no learning, so the floor loop keeps carrying the base load.
+CONF_HEATER_ROLE = "heater_role"
+HEATER_ROLE_AUTO = "auto"  # assist if a radiator shares the room with a floor loop
+HEATER_ROLE_PRIMARY = "primary"
+HEATER_ROLE_ASSIST = "assist"
+DEFAULT_HEATER_ROLE = HEATER_ROLE_AUTO
+# Assist: switch on when the room is predicted to be this far below target ...
+ASSIST_ON_BELOW = 0.5  # K
+# ... and off again once it is predicted to be closer than this.
+ASSIST_OFF_BELOW = 0.1  # K
 
 HEATING_TYPE_FLOOR = "floor"
 HEATING_TYPE_RADIATOR = "radiator"

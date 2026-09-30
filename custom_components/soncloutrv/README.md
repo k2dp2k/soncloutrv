@@ -123,6 +123,7 @@ Bei der Einrichtung kannst du jedem SonTRV einen einfachen Raum zuordnen:
 ### Einstellungen (live, ohne Neuladen)
 - `select.[name]_heizungstyp` – Flächenheizung / Heizkörper (setzt die Regelparameter auf das Profil)
 - `select.[name]_steuermodus` – PID (Standard), PWM, Binär, Proportional
+- Option „Rolle im Raum“ (Optionsdialog): Automatisch / Hauptheizung / Zusatzheizung, Attribut `heater_role`
 - `number.[name]_hysterese` – Schaltabstand Binär-Modus, Übertemperatur-Abschaltung im PID-Modus
 - `number.[name]_tragheit_min_update_intervall` – Regelintervall (Standard 15 min Fußboden / 5 min Heizkörper)
 - `number.[name]_vorausschau_totzeit` – Vorausschau (Standard 45 min Fußboden / 12 min Heizkörper)
@@ -216,7 +217,10 @@ Beide über Zigbee2MQTT.
 ## ❄️ Betrieb im Winter (ohne manuelle Eingriffe)
 
 - **Saisonschalter**: Alle Thermostate auf `heat` (z. B. per Automation aus einem `input_select`), im Sommer auf `off`. Mehr ist nicht nötig: Sollwerte, Fenster, Sensorausfälle, TRV-Neustarts und der Verkalkungsschutz werden von der Integration behandelt. Vollautomatisch: Statistik-Helfer „3-Tage-Mittel“ auf die Außentemperatur, Automation mit `numeric_state` unter 15 °C (1 h) → Winter, über 18 °C (24 h) → Sommer.
-- **Mehrere Heizungstypen im Raum** (Fußboden + Handtuchheizkörper): dem schnellen Heizkörper 1 K weniger Sollwert geben, sonst erreicht er das Ziel zuerst und der Fußboden lernt nie seinen Grundbedarf.
+- **Offener Raum mit mehreren Kreisen** (Wohnzimmer + Küche, ein Thermometer): beiden Thermostaten denselben Raum zuweisen. Sie teilen sich dann einen lernenden Regler, beide Ventile bekommen denselben Bedarf, gewichtet über `number.[name]_raum_leistungsanteil` (z. B. 0,8 für den Kreis im wärmeren Teil des Raums). Kp/Ki/Kd/Ka müssen auf beiden gleich sein; die Integration warnt im Log, wenn sie auseinanderlaufen. Die Ventile bewegen sich zeitversetzt, was den gemeinsamen Vorlauf schont.
+- **Mehrere Heizungstypen im Raum** (Fußboden + Handtuchheizkörper): Der Heizkörper wird automatisch zur **Zusatzheizung** (Option „Rolle im Raum“, Standard „Automatisch“): Zweipunkt auf die vorhergesagte Temperatur, ein ab 0,5 K unter Soll, aus ab 0,1 K unter Soll, ohne eigenes Lernen. Der Fußboden trägt die Grundlast und lernt den Bedarf, der Heizkörper fängt nur schnelle Einbrüche (Duschen, Tür) ab. Beide bekommen denselben Sollwert.
+- **TRV-Sensor als Notfall-Quelle**: nur, wenn sein Offset zum Raumsensor stabil ist (Attribut `trv_sensor_trusted`). Ein Bosch am Rücklauf oder ein TRVZB in der ClouSet-Box misst Rohrtemperatur, sobald Wasser fließt; das erkennt die Integration selbst und hält dann lieber den gelernten Bedarf.
+- **Ventil-Öffnungsbeginn bestimmen**: In der Raum-CSV stehen `trv_local_temp` und `valve_opening_percent`. Steigt die TRV-Temperatur erst ab z. B. 12 % Öffnung deutlich an, ist das der Öffnungsbeginn → `number.[name]_ventil_offnungsbeginn`.
 - **Fenster**: Sensoren werden beim Start und in jedem Regelzyklus geprüft. Ein Fenster, das beim HA-Neustart bereits offen war, oder ein verpasstes Zigbee-Ereignis führt nicht zu Heizen bei offenem Fenster.
 - **Raumsensor stumm**: Viele Sensoren melden nur bei Änderung (0,1 K). Bleibt der Sensor länger als „Sensor-Ausfall nach“ still, wird er weiter verwendet, solange der TRV-eigene Sensor (offsetkorrigiert) innerhalb von 1 K zustimmt (Attribut `sensor_stale`). Erst bei Abweichung oder `unavailable` übernimmt der TRV-Sensor, ohne Sensor der gelernte Grundbedarf.
 - **Außensensor**: Nicht in die Sonne hängen, sonst bricht die Wettervorsteuerung an sonnigen Nachmittagen ein (der Wert wird 2 h tiefpassgefiltert, das fängt kurze Spitzen ab, keine Stunden).
@@ -243,6 +247,18 @@ Beide über Zigbee2MQTT.
 - Der erste Durchlauf erfolgt 7 Tage nach Aktivierung
 
 ## 📄 Changelog
+
+### v2.3.0 (2026-09-30) – ClouSet + Handtuchheizkörper (Bosch am Rücklauf) 🛁
+
+Keine Migration, alle Entitäten und Lernwerte bleiben.
+
+- **Rolle im Raum** (neue Option, Standard „Automatisch“): Ein Heizkörper im selben Raum wie ein Fußbodenkreis arbeitet als Zusatzheizung (Zweipunkt auf die Vorhersage: ein ab −0,5 K, aus ab −0,1 K, kein eigener I-Anteil). Simulation Bad (`tests/sim_bath.py`): mit gleichem Sollwert übernahm der Handtuchheizkörper 46–71 % der Heizarbeit bei über 100 Ventilbewegungen pro Tag; als Zusatzheizung trägt der Fußboden die Grundlast, der Heizkörper 12–14 %, Regelabweichung 0,28–0,29 K RMS, ca. 20 Bewegungen pro Tag.
+- **Offener Raum mit mehreren Kreisen** (Wohnzimmer + Küche): unverändert ein gemeinsamer Regler; neu eine Log-Warnung, wenn die Regelparameter der Kreise eines Raums unterschiedlich sind (es gilt sonst stillschweigend der zuletzt geänderte Kreis).
+- **TRV-Sensor nur bei stabilem Offset**: Die Streuung des Offsets Raumsensor ↔ TRV-Sensor wird mitgelernt (Attribut `sensor_fallback_deviation`). Über 0,6 K gilt der TRV-Sensor als Rohrtemperatur (Bosch am Rücklauf, TRVZB in der ClouSet-Box) und wird weder als Ersatz noch zur Plausibilitätsprüfung genutzt.
+- **Bosch**: Betriebsart „pause“/„schedule“ wird im Heizbetrieb auf „manual“ gestellt (sonst ignoriert oder überschreibt das Gerät die Ventilvorgabe); die Raumtemperatur wird auch im Hold-Modus alle 20 min nachgesendet, damit das Gerät nicht auf seinen Rohrsensor zurückfällt. Attribut `valve_resend_count` und Warnung im Log, wenn das Gerät die Ventilstellung wiederholt selbst ändert.
+- **SONOFF TRVZB**: die geräteeigene Fenstererkennung (`open_window`) wird abgeschaltet, sie würde das Ventil hinter dem Rücken der Regelung schließen. Prüfung einmal pro Stunde und bei Wiederverfügbarkeit.
+- **Raum-CSV**: neue Spalten `trv_local_temp`, `valve_reported_percent`, `trv_sensor_trusted` (Öffnungsbeginn der Ventile ablesbar). Eine Datei mit altem Spaltenlayout wird mit Zeitstempel beiseitegelegt.
+- 40 automatische Tests, neue Simulation `tests/sim_bath.py`.
 
 ### v2.2.0 (2026-09-30) – Winterfest ❄️
 

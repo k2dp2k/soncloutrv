@@ -133,6 +133,7 @@
           "valve_opening_step": "Maximum valve opening (step)",
           "sensor_timeout": "Sensor failure after (min)",
           "adaptive_feed_forward": "Learn weather feed-forward automatically",
+          "heater_role": "Role in the room",
           "room_logging_enabled": "CSV logging",
           "room_log_file": "CSV file"
         }
