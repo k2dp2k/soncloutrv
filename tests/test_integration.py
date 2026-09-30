@@ -140,9 +140,12 @@ def _enable(enable_custom_integrations):
     yield
 
 
-async def _setup(hass: HomeAssistant, *, version: int = 1, data=None, options=None) -> tuple[MockConfigEntry, FakeTRV]:
+async def _setup(
+    hass: HomeAssistant, *, version: int = 1, data=None, options=None, window: str = "off"
+) -> tuple[MockConfigEntry, FakeTRV]:
     trv = FakeTRV(hass)
     trv.setup_states()
+    hass.states.async_set(WINDOW, window, {"device_class": "window"})
     entry = MockConfigEntry(
         domain=DOMAIN,
         title="trv_wohn",
@@ -290,6 +293,92 @@ async def test_window_sensor_closes_and_resumes(hass: HomeAssistant, mqtt_mock) 
     assert trv.last("number", "set_value", OPEN)["value"] > 0
     # learned state is kept over the window event
     assert climate._controller.integral == pytest.approx(integral_before, abs=0.5)
+
+
+async def test_window_open_before_start_is_respected(hass: HomeAssistant, mqtt_mock) -> None:
+    """A window that is already open at (re)start never sends an event."""
+    _, trv = await _setup(hass, window="on")
+    await _run_cycle(hass)
+    state = hass.states.get("climate.trv_wohn")
+    assert state.attributes["window_open"] is True
+    assert trv.last("number", "set_value", OPEN)["value"] == 0
+    hass.states.async_set(WINDOW, "off", {"device_class": "window"})
+    await hass.async_block_till_done()
+    assert hass.states.get("climate.trv_wohn").attributes["window_open"] is False
+    assert trv.last("number", "set_value", OPEN)["value"] > 0
+
+
+async def test_missed_window_event_is_caught_by_control_cycle(hass: HomeAssistant, mqtt_mock) -> None:
+    _, trv = await _setup(hass)
+    await _run_cycle(hass)
+    climate = runtime.climate_for_entry(hass, ENTRY_ID)
+    # simulate a missed event: set the state without the listener seeing it
+    for remove in climate._remove_listeners:
+        remove()
+    climate._remove_listeners.clear()
+    hass.states.async_set(WINDOW, "on", {"device_class": "window"})
+    await hass.async_block_till_done()
+    assert climate._window_freeze_active is False
+    await _run_cycle(hass, 20)
+    assert climate._window_freeze_active is True
+    assert trv.last("number", "set_value", OPEN)["value"] == 0
+
+
+async def test_silent_sensor_stays_trusted_when_plausible(hass: HomeAssistant, mqtt_mock, freezer) -> None:
+    """Sensors reporting on change only are silent in a stable room."""
+    _, trv = await _setup(hass)
+    await _run_cycle(hass)
+    climate = runtime.climate_for_entry(hass, ENTRY_ID)
+    assert climate._local_offset == pytest.approx(-1.5)
+    freezer.tick(timedelta(hours=5))  # > sensor_timeout (4 h), room sensor silent
+    hass.states.async_set(LOCAL, "22.1", {"device_class": "temperature"}, force_update=True)
+    await _run_cycle(hass, 0.1)
+    state = hass.states.get("climate.trv_wohn")
+    assert state.attributes["temperature_source"] == "sensor"
+    assert state.attributes["sensor_stale"] is True
+    assert state.attributes["current_temperature"] == 20.5
+    # the TRV sensor says the room moved by 2 K -> the silent sensor is stale
+    hass.states.async_set(LOCAL, "24.0", {"device_class": "temperature"}, force_update=True)
+    await _run_cycle(hass, 16)
+    state = hass.states.get("climate.trv_wohn")
+    assert state.attributes["temperature_source"] == "trv_sensor"
+    assert state.attributes["current_temperature"] == pytest.approx(22.5, abs=0.05)
+    # a fresh report restores the sensor as the source
+    hass.states.async_set(ROOM, "22.4", {"device_class": "temperature"}, force_update=True)
+    await _run_cycle(hass, 16)
+    state = hass.states.get("climate.trv_wohn")
+    assert state.attributes["temperature_source"] == "sensor"
+    assert state.attributes["sensor_stale"] is False
+
+
+async def test_target_from_options_is_applied_live(hass: HomeAssistant, mqtt_mock) -> None:
+    entry, _ = await _setup(hass)
+    climate = runtime.climate_for_entry(hass, ENTRY_ID)
+    assert climate.target_temperature == 21.5
+    hass.config_entries.async_update_entry(entry, options={**entry.options, "target_temp": 20.0})
+    await hass.async_block_till_done()
+    assert runtime.climate_for_entry(hass, ENTRY_ID) is climate  # no reload
+    assert climate.target_temperature == 20.0
+    # unrelated option changes do not touch a target set by the user meanwhile
+    await climate.async_set_temperature(temperature=22.0)
+    hass.config_entries.async_update_entry(entry, options={**entry.options, "kp": 30.0})
+    await hass.async_block_till_done()
+    assert climate.target_temperature == 22.0
+
+
+def test_room_log_rotation(tmp_path, monkeypatch) -> None:
+    from custom_components.soncloutrv import climate as climate_module
+
+    path = str(tmp_path / "log.csv")
+    header = ",".join(climate_module.SonClouTRVClimate._LOG_HEADER)
+    monkeypatch.setattr(climate_module, "ROOM_LOG_MAX_BYTES", len(header) + 40)
+    row = ["2026-01-01T00:00:00+00:00", "r", "climate.x"] + [0] * (len(climate_module.SonClouTRVClimate._LOG_HEADER) - 3)
+    for _ in range(4):
+        climate_module.SonClouTRVClimate._append_log_row(path, row)
+    assert (tmp_path / "log.csv.1").is_file()
+    with open(path, encoding="utf-8") as handle:
+        lines = handle.read().splitlines()
+    assert lines[0] == header and 1 < len(lines) < 4
 
 
 async def test_sensor_failure_falls_back_to_trv_sensor(hass: HomeAssistant, mqtt_mock, freezer) -> None:

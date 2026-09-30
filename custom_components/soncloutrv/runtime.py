@@ -17,7 +17,10 @@ _LOGGER = logging.getLogger(__name__)
 
 STORAGE_KEY = f"{DOMAIN}.controllers"
 STORAGE_VERSION = 1
-SAVE_DELAY = 120  # seconds
+# Learned state changes slowly (integral time 4 h). Persisting it every few
+# minutes would only wear the SD card / eMMC of a Home Assistant OS box; a
+# pending delayed save is still flushed by HA on shutdown.
+SAVE_DELAY = 30 * 60  # seconds
 
 
 def domain_data(hass: HomeAssistant) -> dict[str, Any]:

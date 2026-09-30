@@ -72,6 +72,30 @@ def test_overtemperature_cutoff():
         ctrl.add_temperature(i * 900.0, 22.3)
     res = ctrl.compute(3600.0, 21.5)
     assert res.demand == 0.0
+    assert res.reason == "over_temperature"
+
+
+def test_cutoff_unlearns_positive_integral_but_not_below_zero():
+    """Summer / sun: a high integral is reduced, but never driven far negative."""
+    ctrl = RoomController("r")
+    ctrl.integral = 60.0
+    now = 0.0
+    for _ in range(8):  # 2 h at +0.8 K
+        ctrl.add_temperature(now, 22.3)
+        ctrl.compute(now, 21.5)
+        now += 900
+    assert ctrl.integral < 60.0
+    # weeks of over-temperature (heating left on in summer)
+    for _ in range(4 * 24 * 14):
+        ctrl.add_temperature(now, 24.0)
+        res = ctrl.compute(now, 21.5)
+        now += 900
+    assert res.demand == 0.0
+    assert ctrl.integral >= -0.01
+    # a normal winter day afterwards starts from a neutral integral
+    ctrl.add_temperature(now, 20.9)
+    res = ctrl.compute(now, 21.5)
+    assert res.demand > 0
 
 
 def test_binary_mode_hysteresis():
@@ -108,6 +132,9 @@ def test_persistence_roundtrip():
     assert other.integral == 12.3 and other.ff_coeff == 1.5
     other.restore({"integral": "garbage", "ff_coeff": "x"})
     assert other.integral == 0.0 and other.ff_coeff is None
+    # a stored value from an older version is clamped into the new bounds
+    other.restore({"integral": -50.0, "ff_coeff": None})
+    assert other.integral == -25.0
 
 
 def test_demand_to_opening():

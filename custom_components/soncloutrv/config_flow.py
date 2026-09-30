@@ -74,6 +74,18 @@ CONTROL_MODE_OPTIONS = [
 ]
 
 
+def _outside_selector() -> selector.EntitySelector:
+    """Outside temperature: a temperature sensor or a weather entity."""
+    return selector.EntitySelector(
+        selector.EntitySelectorConfig(
+            filter=[
+                selector.EntityFilterSelectorConfig(domain="sensor", device_class="temperature"),
+                selector.EntityFilterSelectorConfig(domain="weather"),
+            ]
+        )
+    )
+
+
 def _room_selector() -> selector.SelectSelector:
     return selector.SelectSelector(
         selector.SelectSelectorConfig(
@@ -187,9 +199,7 @@ class SonClouTRVConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 vol.Required(CONF_TEMP_SENSOR): selector.EntitySelector(
                     selector.EntitySelectorConfig(domain="sensor", device_class="temperature")
                 ),
-                vol.Optional(CONF_OUTSIDE_TEMP_SENSOR): selector.EntitySelector(
-                    selector.EntitySelectorConfig(domain=["sensor", "weather"], device_class="temperature")
-                ),
+                vol.Optional(CONF_OUTSIDE_TEMP_SENSOR): _outside_selector(),
                 vol.Optional(CONF_WINDOW_SENSORS): selector.EntitySelector(
                     selector.EntitySelectorConfig(
                         domain="binary_sensor",
@@ -305,9 +315,7 @@ class SonClouTRVOptionsFlow(config_entries.OptionsFlow):
                 vol.Optional(
                     CONF_OUTSIDE_TEMP_SENSOR,
                     description={"suggested_value": outside_default} if outside_default else {},
-                ): selector.EntitySelector(
-                    selector.EntitySelectorConfig(domain=["sensor", "weather"])
-                ),
+                ): _outside_selector(),
                 vol.Required(
                     CONF_ROOM_ID, default=current.get(CONF_ROOM_ID) or DEFAULT_ROOMS[0]
                 ): _room_selector(),

@@ -213,6 +213,15 @@ Beide über Zigbee2MQTT.
 - Das TRV wird im Heizbetrieb aktiv auf `heat` gestellt (v1 ließ es nach „Aus“ dauerhaft aus).
 - Die externe Temperatur wird bei Änderung und spätestens alle 30 min gesendet.
 
+## ❄️ Betrieb im Winter (ohne manuelle Eingriffe)
+
+- **Saisonschalter**: Alle Thermostate auf `heat` (z. B. per Automation aus einem `input_select`), im Sommer auf `off`. Mehr ist nicht nötig: Sollwerte, Fenster, Sensorausfälle, TRV-Neustarts und der Verkalkungsschutz werden von der Integration behandelt.
+- **Fenster**: Sensoren werden beim Start und in jedem Regelzyklus geprüft. Ein Fenster, das beim HA-Neustart bereits offen war, oder ein verpasstes Zigbee-Ereignis führt nicht zu Heizen bei offenem Fenster.
+- **Raumsensor stumm**: Viele Sensoren melden nur bei Änderung (0,1 K). Bleibt der Sensor länger als „Sensor-Ausfall nach“ still, wird er weiter verwendet, solange der TRV-eigene Sensor (offsetkorrigiert) innerhalb von 1 K zustimmt (Attribut `sensor_stale`). Erst bei Abweichung oder `unavailable` übernimmt der TRV-Sensor, ohne Sensor der gelernte Grundbedarf.
+- **Außensensor**: Nicht in die Sonne hängen, sonst bricht die Wettervorsteuerung an sonnigen Nachmittagen ein (der Wert wird 2 h tiefpassgefiltert, das fängt kurze Spitzen ab, keine Stunden).
+- **Keine Nachtabsenkung bei Estrich**: Das Modell zeigt nach einer Absenkung 22–6 Uhr morgens bis zu 2 K Untertemperatur; konstante Sollwerte sind bei Flächenheizung sparsamer und komfortabler.
+- **Lernwerte**: I-Anteil und Wettervorsteuerung werden über Neustarts gespeichert (alle 30 min und beim Beenden). Nach Umbauten `button.[name]_lernwerte_zurucksetzen`.
+
 ## 🐛 Troubleshooting
 
 **Ventil öffnet nur wenig trotz großer Temperaturdifferenz:**
@@ -233,6 +242,18 @@ Beide über Zigbee2MQTT.
 - Der erste Durchlauf erfolgt 7 Tage nach Aktivierung
 
 ## 📄 Changelog
+
+### v2.2.0 (2026-09-30) – Winterfest ❄️
+
+Kein Neuanlegen, keine Migration: Config-Version bleibt 4, alle Entity-IDs und Lernwerte bleiben erhalten.
+
+- **Fenster beim Start / verpasste Ereignisse**: Fenstersensoren werden beim Start des Regelbetriebs und in jedem Regelzyklus geprüft, nicht nur bei einem Zustandswechsel. Bisher heizte ein Thermostat nach einem HA-Neustart bei bereits offenem Fenster weiter, bis das Fenster erneut geöffnet wurde.
+- **Stumme Raumsensoren**: Ein Sensor, der nur bei Änderung meldet, wurde in stabilen Räumen nach 4 h fälschlich durch den TRV-Sensor ersetzt (der neben der Verteilerbox misst und mit dem Ventilzustand schwankt). Jetzt bleibt er die Quelle, solange der TRV-Sensor innerhalb von 1 K zustimmt. Neues Attribut `sensor_stale`.
+- **I-Anteil nach Sommer/Sonne**: Untere Grenze −25 % statt −50 %, und während der Übertemperatur-Abschaltung wird ein I-Anteil ≤ 0 nicht weiter abgesenkt. Ein im Sommer auf „Heizen“ gelassener Raum brauchte sonst im Herbst viele Stunden, bis das Ventil überhaupt öffnete.
+- **Zieltemperatur aus dem Optionsdialog** wirkt sofort, ohne Neuladen.
+- **Außentemperatur**: Wetter-Entitäten werden im Einrichtungsdialog wieder angeboten.
+- **Speicher/SD-Karte**: Lernwerte werden alle 30 min statt alle 2 min gespeichert (Abschluss-Schreiben beim Beenden bleibt). Raum-CSV rotiert bei 20 MB nach `.1`.
+- Tests: 36 automatische Tests (Fenster beim Start, verpasstes Ereignis, stummer Sensor, Optionen live, Log-Rotation, I-Anteil-Grenze).
 
 ### v2.1.0 (2026-09-28) – Bosch Heizkörper-Thermostat II
 
