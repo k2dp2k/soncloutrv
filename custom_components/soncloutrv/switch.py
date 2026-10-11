@@ -21,7 +21,7 @@ from .const import DOMAIN, VERSION
 _LOGGER = logging.getLogger(__name__)
 
 EXERCISE_WEEKDAY = 6  # Sunday
-EXERCISE_HOUR = 3
+EXERCISE_HOUR = 11  # daytime: valves are audible, nobody should be woken up
 MIN_DAYS_BETWEEN = 6
 
 
@@ -35,7 +35,7 @@ async def async_setup_entry(
 
 
 class AntiCalcificationSwitch(SwitchEntity, RestoreEntity):
-    """Weekly valve exercise (Sunday 03:xx, staggered per circuit)."""
+    """Weekly valve exercise (Sunday 11:xx, staggered per circuit)."""
 
     _attr_should_poll = False
 
@@ -47,7 +47,7 @@ class AntiCalcificationSwitch(SwitchEntity, RestoreEntity):
         self._attr_icon = "mdi:water-off"
         self._attr_is_on = True
         self._last_exercise = None
-        # Stagger the circuits (they share one supply) over 03:00-03:50.
+        # Stagger the circuits (they share one supply) over 11:00-11:50.
         self._minute = (sum(ord(c) for c in config_entry.entry_id) % 6) * 10
         self._attr_device_info = DeviceInfo(
             identifiers={(DOMAIN, config_entry.entry_id)},
@@ -98,10 +98,10 @@ class AntiCalcificationSwitch(SwitchEntity, RestoreEntity):
     def extra_state_attributes(self) -> dict[str, Any]:
         attrs: dict[str, Any] = {
             "description": (
-                "Ventil jeden Sonntag gegen 3 Uhr durchbewegen (5 min offen, 5 min zu). "
+                "Ventil jeden Sonntag gegen 11 Uhr durchbewegen (5 min offen, 5 min zu). "
                 "Funktioniert auch im Sommer bei ausgeschalteter Heizung."
             ),
-            "schedule": f"Sonntag 03:{self._minute:02d}",
+            "schedule": f"Sonntag {EXERCISE_HOUR:02d}:{self._minute:02d}",
         }
         if self._last_exercise:
             attrs["last_exercise"] = self._last_exercise.isoformat()

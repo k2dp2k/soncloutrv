@@ -29,7 +29,7 @@ Beeinflussung der Räume lässt einen gewöhnlichen PID-Regler pendeln. Ab v2.0.
 - 🛟 **Sensor-Ausfall-Fallback** – TRV-Sensor mit gelerntem Offset, sonst gelernter Grundbedarf
 - 🚨 **Erkennung fehlender Vorlaufwärme** (Ventil offen, Raum wird nicht wärmer) – stoppt das Hochlaufen des I-Anteils
 - 🚪 **Fenster** per Sensor (Raum oder global) oder Temperatursturz; Lernwerte bleiben erhalten, sanfter Wiederanlauf
-- 🛡️ **Verkalkungsschutz** jeden Sonntag gegen 3 Uhr (Kreise zeitversetzt), auch im Sommer
+- 🛡️ **Verkalkungsschutz** jeden Sonntag gegen 11 Uhr (Kreise zeitversetzt), auch im Sommer
 - 📑 **CSV-Logging** aller Regler-Interna für Analysen, 🧾 **Diagnose-Download**
 - 🇩🇪 Deutsche und englische Übersetzung
 
@@ -133,7 +133,7 @@ Bei der Einrichtung kannst du jedem SonTRV einen einfachen Raum zuordnen:
 - `number.[name]_ventil_offnungsbeginn` – Öffnung, ab der Wasser fließt
 
 ### Verkalkungsschutz & Wartung
-- `switch.[name]_verkalkungsschutz` – Sonntag 03:00–03:50 (je Kreis versetzt)
+- `switch.[name]_verkalkungsschutz` – Sonntag 11:00–11:50 (je Kreis versetzt)
 - `button.[name]_ventil_durchbewegen` – sofort (5 min auf, 5 min zu)
 - `button.[name]_lernwerte_zurucksetzen` – gelernten Wärmebedarf des Raums verwerfen
 
@@ -247,6 +247,10 @@ Beide über Zigbee2MQTT.
 - Der erste Durchlauf erfolgt 7 Tage nach Aktivierung
 
 ## 📄 Changelog
+
+### v2.3.1 (2026-10-11) – Verkalkungsschutz tagsüber 🔇
+- Wöchentliches Ventil-Durchbewegen von Sonntag 03:00–03:50 auf **Sonntag 11:00–11:50** verlegt – die Stellantriebe sind hörbar und haben nachts geweckt
+- `schedule`-Attribut des Verkalkungsschutz-Switch zeigt die tatsächliche Uhrzeit
 
 ### v2.3.0 (2026-09-30) – ClouSet + Handtuchheizkörper (Bosch am Rücklauf) 🛁
 
