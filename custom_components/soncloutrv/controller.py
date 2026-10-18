@@ -51,6 +51,15 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+try:  # package import (Home Assistant) or flat import (tests/sim_*.py)
+    from .insights import MIN_UPDATES_FOR_FORECAST, ComfortTracker, ThermalModel
+except ImportError:  # pragma: no cover - loaded as a single file by tests/sim_*.py
+    import os as _os
+    import sys as _sys
+
+    _sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
+    from insights import MIN_UPDATES_FOR_FORECAST, ComfortTracker, ThermalModel
+
 # --------------------------------------------------------------------------
 # Heating profiles
 # --------------------------------------------------------------------------
@@ -83,6 +92,9 @@ class HeatingProfile:
     # the controlled temperature is rate limited to this value and the
     # integral does not learn while such a disturbance is visible.
     max_air_rate: float | None = None  # None = no limit (radiators)
+    # Time constant (h) of the heat store between valve and room air, used
+    # by the learned room model (insights.ThermalModel).
+    floor_lag_h: float = 0.25
 
 
 PROFILES: dict[str, HeatingProfile] = {
@@ -98,6 +110,7 @@ PROFILES: dict[str, HeatingProfile] = {
         pwm_period_s=60 * 60,
         ff_learn_tau_s=24 * 3600,
         max_air_rate=0.8,
+        floor_lag_h=2.0,
     ),
     # Radiator / towel radiator. Ti = 40 min.
     HEATING_TYPE_RADIATOR: HeatingProfile(
@@ -328,6 +341,8 @@ class RoomController:
 
     def __post_init__(self) -> None:
         self.trend = TemperatureTrend(self.settings.profile.slope_window_s)
+        self.model = ThermalModel(floor_lag_h=self.settings.profile.floor_lag_h)
+        self.comfort = ComfortTracker()
 
     def reset_transients(self) -> None:
         """Forget the trend and the rate limiter (after a window event)."""
@@ -388,6 +403,8 @@ class RoomController:
             "integral": round(self.integral, 4),
             "ff_coeff": None if self.ff_coeff is None else round(self.ff_coeff, 5),
             "heating_type": self.settings.heating_type,
+            "model": self.model.as_dict(),
+            "comfort": self.comfort.as_dict(),
         }
 
     def restore(self, data: dict[str, Any] | None) -> None:
@@ -403,9 +420,13 @@ class RoomController:
             self.ff_coeff = None if coeff is None else clamp(float(coeff), 0.0, 10.0)
         except (TypeError, ValueError):
             self.ff_coeff = None
+        self.model.restore(data.get("model"))
+        self.comfort.restore(data.get("comfort"))
 
     def reset_learning(self) -> None:
-        """Forget the integral and the learned feed-forward."""
+        """Forget the integral, the learned feed-forward and the room model."""
+        self.model.reset()
+        self.comfort = ComfortTracker()
         self.integral = 0.0
         self.ff_coeff = None
         self.no_heat_supply = False
@@ -438,10 +459,13 @@ class RoomController:
         heating_enabled: bool = True,
         mode: str = CONTROL_MODE_PID,
         hysteresis: float | None = None,
+        comfort_target: float | None = None,
     ) -> ControllerResult:
         """Run one control step and return the room demand in percent.
 
         ``hysteresis`` overrides the configured value (binary mode only).
+        ``comfort_target`` is the user's target for the statistics when the
+        control runs on a shifted target (assist heater).
         """
         s = self.settings
         hyst = s.hysteresis if hysteresis is None else hysteresis
@@ -472,6 +496,8 @@ class RoomController:
         measured = temp
         temp = self._rate_limited(now, measured)
         disturbance = abs(measured - temp) > DISTURBANCE_BAND
+        self._observe(now, measured, slope, comfort_target if comfort_target is not None else target,
+                      heating_enabled=heating_enabled, disturbance=disturbance)
         # The prediction may not extrapolate faster than the heating can
         # move the air - a draft would otherwise look like a 1 K deficit.
         slope = clamp(slope, -3.0, 3.0)
@@ -610,6 +636,51 @@ class RoomController:
         )
         self.last_result = result
         return result
+
+    def _observe(
+        self, now: float, temp: float, slope: float, target: float, *, heating_enabled: bool, disturbance: bool
+    ) -> None:
+        """Feed the comfort statistics and the learned room model."""
+        if not heating_enabled or self.frozen:
+            return
+        self.comfort.add(now, temp - target)
+        outside = self._outside_filtered
+        if outside is not None and not disturbance and not self.no_heat_supply:
+            self.model.update(now, temp, slope, outside)
+
+    def insights(self, target: float | None, demand: float) -> dict[str, Any]:
+        """Learned model + comfort statistics for the UI (see insights.py)."""
+        model = self.model
+        comfort = self.comfort.stats()
+        out: dict[str, Any] = {
+            "comfort_in_band_24h": comfort["in_band"],
+            "comfort_rms_24h": comfort["rms"],
+            "comfort_mean_24h": comfort["mean"],
+            "comfort_samples": comfort["samples"],
+            "model_updates": model.updates,
+            "model_ready": model.updates >= MIN_UPDATES_FOR_FORECAST,
+            "model_time_constant_h": round(model.time_constant_h, 1),
+            "model_heating_rate": round(model.heating_rate, 2),
+            "model_foreign_heat": round(model.foreign_heat, 2),
+            "model_confidence": model.confidence(),
+            "model_rmse": None if model.rmse is None else round(model.rmse, 3),
+            "model_demand": None,
+            "model_forecast_3h": None,
+            "model_forecast": None,
+        }
+        temp = self.trend.last
+        outside = self._outside_filtered
+        if out["model_ready"] and temp is not None and outside is not None:
+            if target is not None:
+                out["model_demand"] = model.steady_demand(target, outside)
+            scenarios = {
+                "hold": model.forecast(temp, outside, demand),
+                "off": model.forecast(temp, outside, 0.0),
+                "full": model.forecast(temp, outside, 100.0),
+            }
+            out["model_forecast"] = scenarios
+            out["model_forecast_3h"] = next(v for m, v in scenarios["hold"] if m == 180)
+        return out
 
     def _supervise_supply(self, now: float, demand: float, error: float, slope: float) -> None:
         """Detect that the valve is open but no heat arrives (boiler off)."""

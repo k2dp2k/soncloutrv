@@ -4,7 +4,7 @@ DOMAIN = "soncloutrv"
 PLATFORMS = ["climate", "sensor", "number", "switch", "button", "select"]
 
 # Integration version (keep in sync with manifest.json)
-VERSION = "2.4.1"
+VERSION = "2.5.0"
 # Config entry schema version. 4 = predictive room controller (v2.0.0)
 CONFIG_VERSION = 4
 # Bump to reset accumulating statistics sensors once (v2.0.0: the old

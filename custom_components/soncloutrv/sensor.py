@@ -264,7 +264,12 @@ async def async_setup_entry(
         ("pid_integral_error", "PID Integral Summe", "mdi:sigma"),
     ]:
         sensors.append(SonClouTRVPIDSensor(hass, config_entry, climate_entity_id, pid_attr, name_suffix, icon))
-    
+
+    # 7. Insights: learning curves (long-term statistics) of the learned
+    # values and of the room model, plus the control quality.
+    for spec in INSIGHT_SENSORS:
+        sensors.append(SonClouTRVInsightSensor(hass, config_entry, climate_entity_id, spec))
+
     async_add_entities(sensors, True)
 
 
@@ -1569,3 +1574,77 @@ class SonClouTRVPIDSensor(SensorEntity):
         if val is not None:
             self._attr_native_value = float(val)
             self.async_write_ha_state()
+
+
+# ===== 7. INSIGHT SENSORS =====
+
+# (climate attribute, name, unit, icon, device class, precision,
+#  only when the room model is ready, extra attributes copied from the climate)
+INSIGHT_SENSORS: tuple[tuple, ...] = (
+    ("comfort_in_band_24h", "Regelgüte 24h", PERCENTAGE, "mdi:bullseye-arrow", None, 0, False,
+     ("comfort_rms_24h", "comfort_mean_24h", "comfort_samples")),
+    ("ff_learned", "Gelernte Wetterabhängigkeit", "%/K", "mdi:snowflake-thermometer", None, 3, False, ()),
+    ("model_time_constant_h", "Raummodell Zeitkonstante", UnitOfTime.HOURS, "mdi:timer-sand", None, 1, True,
+     ("model_updates", "model_rmse")),
+    ("model_heating_rate", "Raummodell Heizleistung", "K/h", "mdi:radiator", None, 2, True, ()),
+    ("model_foreign_heat", "Raummodell Fremdwärme", "K/h", "mdi:home-import-outline", None, 2, True, ()),
+    ("model_forecast_3h", "Raummodell Prognose 3h", UnitOfTemperature.CELSIUS, "mdi:crystal-ball",
+     SensorDeviceClass.TEMPERATURE, 1, True, ("model_demand",)),
+)
+
+
+class SonClouTRVInsightSensor(SensorEntity):
+    """A learned value / model output of the climate entity as a sensor.
+
+    Sensors (unlike attributes) get long-term statistics in Home Assistant,
+    which turns them into learning curves on the dashboard.
+    """
+
+    _attr_should_poll = False
+    _attr_state_class = SensorStateClass.MEASUREMENT
+
+    def __init__(self, hass, config_entry, climate_entity, spec):
+        attribute, name, unit, icon, device_class, precision, needs_model, extra = spec
+        self.hass = hass
+        self._climate_entity = climate_entity
+        self._attribute = attribute
+        self._needs_model = needs_model
+        self._extra = extra
+        self._attr_name = f"{config_entry.data['name']} {name}"
+        self._attr_unique_id = f"{DOMAIN}_{config_entry.entry_id}_insight_{attribute}"
+        self._attr_icon = icon
+        self._attr_native_unit_of_measurement = unit
+        self._attr_device_class = device_class
+        self._attr_suggested_display_precision = precision
+        self._attr_device_info = get_device_info(config_entry)
+        self._attr_native_value = None
+        self._attr_extra_state_attributes = {}
+
+    async def async_added_to_hass(self):
+        await super().async_added_to_hass()
+        self.async_on_remove(
+            async_track_state_change_event(self.hass, [self._climate_entity], self._update)
+        )
+        await self._update()
+
+    async def _update(self, event=None):
+        state = self.hass.states.get(self._climate_entity)
+        if not state:
+            return
+        attrs = state.attributes
+        value = attrs.get(self._attribute)
+        if self._needs_model and not attrs.get("model_ready"):
+            value = None
+        try:
+            value = None if value is None else float(value)
+        except (TypeError, ValueError):
+            value = None
+        extra = {key: attrs.get(key) for key in self._extra}
+        confidence = attrs.get("model_confidence")
+        if self._needs_model and isinstance(confidence, dict):
+            extra["confidence"] = confidence
+        if value == self._attr_native_value and extra == self._attr_extra_state_attributes:
+            return
+        self._attr_native_value = value
+        self._attr_extra_state_attributes = extra
+        self.async_write_ha_state()

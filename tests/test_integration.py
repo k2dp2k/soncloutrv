@@ -716,6 +716,37 @@ async def test_learning_persists_over_reload(hass: HomeAssistant, mqtt_mock) -> 
     assert hass.states.get("sensor.trv_wohn_raum_heizbedarf") is not None
 
 
+async def test_insight_sensors_and_model_persistence(hass: HomeAssistant, mqtt_mock, freezer) -> None:
+    entry, trv = await _setup(hass)
+    for i in range(110):  # > 1 day of control cycles
+        hass.states.async_set(ROOM, str(round(20.5 + 0.1 * (i % 3), 1)), {"device_class": "temperature"})
+        await _wait(hass, freezer, 15 * 60)
+    climate = runtime.climate_for_entry(hass, ENTRY_ID)
+    state = hass.states.get("climate.trv_wohn")
+    assert state.attributes["model_updates"] > 96
+    assert state.attributes["model_ready"] is True
+    assert set(state.attributes["model_forecast"]) == {"hold", "off", "full"}
+    assert state.attributes["comfort_samples"] > 0
+    # forecast curves and the confidence dict are not written to the recorder
+    assert {"model_forecast", "model_confidence"} <= climate._unrecorded_attributes
+    for object_id in (
+        "regelgute_24h",
+        "gelernte_wetterabhangigkeit",
+        "raummodell_zeitkonstante",
+        "raummodell_heizleistung",
+        "raummodell_fremdwarme",
+        "raummodell_prognose_3h",
+    ):
+        sensor = hass.states.get(f"sensor.trv_wohn_{object_id}")
+        assert sensor is not None, object_id
+        assert sensor.attributes.get("state_class") == "measurement", object_id
+    assert hass.states.get("sensor.trv_wohn_raummodell_zeitkonstante").state not in ("unknown", "unavailable")
+    updates = climate._controller.model.updates
+    assert await hass.config_entries.async_reload(entry.entry_id)
+    await hass.async_block_till_done()
+    assert runtime.climate_for_entry(hass, ENTRY_ID)._controller.model.updates == updates
+
+
 async def test_structural_option_change_reloads(hass: HomeAssistant, mqtt_mock) -> None:
     entry, _ = await _setup(hass)
     climate = runtime.climate_for_entry(hass, ENTRY_ID)
