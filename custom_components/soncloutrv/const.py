@@ -4,7 +4,7 @@ DOMAIN = "soncloutrv"
 PLATFORMS = ["climate", "sensor", "number", "switch", "button", "select"]
 
 # Integration version (keep in sync with manifest.json)
-VERSION = "2.3.1"
+VERSION = "2.4.0"
 # Config entry schema version. 4 = predictive room controller (v2.0.0)
 CONFIG_VERSION = 4
 # Bump to reset accumulating statistics sensors once (v2.0.0: the old
@@ -49,6 +49,12 @@ CONF_WINDOW_MAX_FREEZE = "window_max_freeze"
 # Optional Fenster-/Türsensoren für explizite Fenstererkennung
 CONF_WINDOW_SENSORS = "window_sensors"
 CONF_WINDOW_SENSOR_SCOPE = "window_sensor_scope"
+# A window/door must be open at least this long before the valve closes.
+# Real data: the front door opens 10-19 times a day for a few seconds and
+# door contacts bounce; reacting to every opening moved the hallway valve
+# 30+ times a day without any benefit.
+CONF_WINDOW_OPEN_DELAY = "window_open_delay"  # seconds
+DEFAULT_WINDOW_OPEN_DELAY = 120
 
 # v2.0.0
 CONF_HEATING_TYPE = "heating_type"
