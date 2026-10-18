@@ -87,7 +87,7 @@ def test_controller_persists_model_and_comfort():
     ctrl = RoomController("r")
     ctrl.add_outside_temperature(0, 5.0)
     now = 0.0
-    for i in range(130):
+    for i in range(200):
         ctrl.add_temperature(now, 21.5 + 0.1 * math.sin(i / 10))
         res = ctrl.compute(now, 21.5)
         ctrl.model.track_input(now, res.demand)
@@ -97,9 +97,51 @@ def test_controller_persists_model_and_comfort():
     assert info["model_ready"] is True
     assert info["comfort_in_band_24h"] == 100.0
     assert set(info["model_forecast"]) == {"hold", "off", "full"}
+    assert info["model_skill_samples"] >= 48 and info["model_skill"] is not None
+    assert info["model_pred_error"] is not None and info["trend_pred_error"] is not None
     other = RoomController("r")
     other.restore(ctrl.as_dict())
     assert other.model.updates == ctrl.model.updates
     assert other.comfort.stats() == ctrl.comfort.stats()
+    assert abs(other.skill.skill() - ctrl.skill.skill()) <= 5  # rounded on save
     other.reset_learning()
     assert other.model.updates == 0 and other.comfort.stats()["samples"] == 0
+    assert other.skill.samples == 0
+
+
+def test_skill_tracker_scores_due_predictions():
+    from custom_components.soncloutrv.insights import SkillTracker
+
+    skill = SkillTracker()
+    now = 0.0
+    for _ in range(60):
+        # model is 0.05 K off, trend 0.2 K
+        skill.resolve(now, 21.0)
+        skill.add(now, now + 2700, 21.05, 21.2)
+        now += 900
+    assert skill.samples >= SkillTracker.MIN_SAMPLES
+    assert abs(skill.rmse_model - 0.05) < 1e-6 and abs(skill.rmse_trend - 0.2) < 1e-6
+    assert skill.skill() == 75
+    skill.discard_pending()
+    assert skill.pending == []
+    other = SkillTracker()
+    other.restore(skill.as_dict())
+    assert other.skill() == 75
+    other.restore({"m": -1, "t": 0.1, "n": 5})  # garbage is ignored
+    assert other.skill() == 75
+
+
+def test_skill_tracker_drops_late_predictions():
+    from custom_components.soncloutrv.insights import SkillTracker
+
+    skill = SkillTracker()
+    skill.add(0, 2700, 21.0, 21.0)
+    skill.resolve(2700 + 3 * 3600, 25.0)  # controller paused for hours
+    assert skill.samples == 0 and skill.pending == []
+
+
+def test_model_predict_matches_forecast():
+    model = ThermalModel(floor_lag_h=2.0)
+    _drive(model, a=0.05, b=2.0, c=0.1, days=3, heat=True)
+    fc = model.forecast(21.0, 5.0, 40.0)
+    assert abs(model.predict(21.0, 5.0, 40.0, 3.0) - next(v for m, v in fc if m == 180)) < 0.01

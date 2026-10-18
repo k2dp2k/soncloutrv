@@ -52,13 +52,13 @@ from dataclasses import dataclass, field
 from typing import Any
 
 try:  # package import (Home Assistant) or flat import (tests/sim_*.py)
-    from .insights import MIN_UPDATES_FOR_FORECAST, ComfortTracker, ThermalModel
+    from .insights import MIN_UPDATES_FOR_FORECAST, ComfortTracker, SkillTracker, ThermalModel
 except ImportError:  # pragma: no cover - loaded as a single file by tests/sim_*.py
     import os as _os
     import sys as _sys
 
     _sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
-    from insights import MIN_UPDATES_FOR_FORECAST, ComfortTracker, ThermalModel
+    from insights import MIN_UPDATES_FOR_FORECAST, ComfortTracker, SkillTracker, ThermalModel
 
 # --------------------------------------------------------------------------
 # Heating profiles
@@ -343,6 +343,7 @@ class RoomController:
         self.trend = TemperatureTrend(self.settings.profile.slope_window_s)
         self.model = ThermalModel(floor_lag_h=self.settings.profile.floor_lag_h)
         self.comfort = ComfortTracker()
+        self.skill = SkillTracker()
 
     def reset_transients(self) -> None:
         """Forget the trend and the rate limiter (after a window event)."""
@@ -405,6 +406,7 @@ class RoomController:
             "heating_type": self.settings.heating_type,
             "model": self.model.as_dict(),
             "comfort": self.comfort.as_dict(),
+            "skill": self.skill.as_dict(),
         }
 
     def restore(self, data: dict[str, Any] | None) -> None:
@@ -422,11 +424,13 @@ class RoomController:
             self.ff_coeff = None
         self.model.restore(data.get("model"))
         self.comfort.restore(data.get("comfort"))
+        self.skill.restore(data.get("skill"))
 
     def reset_learning(self) -> None:
         """Forget the integral, the learned feed-forward and the room model."""
         self.model.reset()
         self.comfort = ComfortTracker()
+        self.skill = SkillTracker()
         self.integral = 0.0
         self.ff_coeff = None
         self.no_heat_supply = False
@@ -511,6 +515,9 @@ class RoomController:
         # Limit how far we look ahead so a sensor glitch cannot flip the output.
         predicted_shift = clamp(pred_slope * horizon_h, -1.0, 1.0)
         predicted_error = target - (temp + predicted_shift)
+        self._score_model(
+            now, measured, predicted_shift, s.horizon_s, disturbance=disturbance, heating_enabled=heating_enabled
+        )
 
         if mode == CONTROL_MODE_PROPORTIONAL:
             demand = clamp(error / 3.0 * 100.0, 0.0, 100.0)
@@ -637,6 +644,33 @@ class RoomController:
         self.last_result = result
         return result
 
+    def _score_model(
+        self,
+        now: float,
+        temp: float,
+        trend_shift: float,
+        horizon_s: float,
+        *,
+        disturbance: bool,
+        heating_enabled: bool,
+    ) -> None:
+        """Record model and trend prediction for the horizon (SkillTracker).
+
+        Shadow mode: the controller keeps acting on the trend. Simulations
+        (README, v2.5.1) showed no gain from steering with the model; this
+        measures whether that also holds in the real rooms.
+        """
+        skill = self.skill
+        if disturbance or self.frozen or not heating_enabled:
+            skill.discard_pending()
+            return
+        skill.resolve(now, temp)
+        outside = self._outside_filtered
+        if outside is None or self.model.updates < MIN_UPDATES_FOR_FORECAST:
+            return
+        predicted = self.model.predict(temp, outside, self.model.u_last * 100.0, horizon_s / 3600.0)
+        skill.add(now, now + horizon_s, temp + clamp(predicted - temp, -1.0, 1.0), temp + trend_shift)
+
     def _observe(
         self, now: float, temp: float, slope: float, target: float, *, heating_enabled: bool, disturbance: bool
     ) -> None:
@@ -667,6 +701,10 @@ class RoomController:
             "model_demand": None,
             "model_forecast_3h": None,
             "model_forecast": None,
+            "model_pred_error": None if self.skill.rmse_model is None else round(self.skill.rmse_model, 2),
+            "trend_pred_error": None if self.skill.rmse_trend is None else round(self.skill.rmse_trend, 2),
+            "model_skill": self.skill.skill(),
+            "model_skill_samples": self.skill.samples,
         }
         temp = self.trend.last
         outside = self._outside_filtered
