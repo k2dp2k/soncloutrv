@@ -296,6 +296,15 @@ Beide über Zigbee2MQTT.
 
 ## 📄 Changelog
 
+### v2.6.1 (2026-10-18) – Raumsensoren mit festem Besitzer 🏷️
+
+Keine Migration, Thermostate, Lernwerte und alle übrigen Entitäten bleiben unverändert.
+
+- **Raum Heizbedarf** und **Raumtemperatur** gibt es pro Raum nur einmal. Welches Thermostat sie bereitstellt, hing bisher davon ab, welches beim Start zuerst eingerichtet wurde. Das wechselte zwischen Neustarts: Einträge blieben als „nicht verfügbar“ zurück (z. B. `sensor.badezimmer_trv_bad_raumtemperatur_2`), die Historie war auf mehrere Entitäten verteilt.
+- Der Besitzer wird jetzt aus allen SonTRV-Einträgen und der Entitätsregistrierung bestimmt, nicht mehr aus der Startreihenfolge: zuerst das Thermostat, dessen Raumsensor bereits registriert ist (Entitäts-ID und Historie bleiben), dann der Hauptheizkreis vor einem Zusatzheizkörper (`assist`), dann die kleinste Eintrags-ID.
+- Verwaiste Raumsensoren der anderen Thermostate im Raum (und solche eines früheren Raums) werden aus der Registrierung entfernt. Betroffen sind nur diese beiden Raumsensoren, nie Klima- oder andere Entitäten.
+- 67 automatische Tests.
+
 ### v2.6.0 (2026-10-18) – Prüfstand für das Raummodell 🔬
 
 Keine Migration, alle Entitäten und Lernwerte bleiben, die Regelung ist unverändert.
