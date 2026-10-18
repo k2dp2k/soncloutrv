@@ -375,6 +375,7 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
         self._valve_resend_count = 0
         self._last_ext_sync_value: float | None = None
         self._last_ext_sync_ts: float | None = None
+        self._last_select_try_ts: float | None = None
         self._outside_temperature: float | None = None
         self._trv_internal_temp: float | None = None
         self._trv_battery: float | None = None
@@ -1477,9 +1478,17 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
                 self._last_ext_sync_ts = now
             return
         select_state = self.hass.states.get(self._sensor_select_entity)
-        if select_state is not None and select_state.state != "external":
+        wanted = self._external_sensor_option(select_state)
+        if (
+            select_state is not None
+            and wanted is not None
+            and select_state.state != wanted
+            # at most once per hour: a device that rejects it is not spammed
+            and (self._last_select_try_ts is None or now - self._last_select_try_ts >= 3600)
+        ):
+            self._last_select_try_ts = now
             await self._async_call(
-                "select", "select_option", {"entity_id": self._sensor_select_entity, "option": "external"}
+                "select", "select_option", {"entity_id": self._sensor_select_entity, "option": wanted}
             )
         elif select_state is None and self.hass.services.has_service("mqtt", "publish") and self._last_ext_sync_ts is None:
             await self._async_call(
@@ -1490,6 +1499,28 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
         if await self._async_set_number(self._temp_input_entity, "external_temperature_input", value):
             self._last_ext_sync_value = value
             self._last_ext_sync_ts = now
+
+    @staticmethod
+    def _external_sensor_option(state: State | None) -> str | None:
+        """Option of the TRVZB sensor select that means "use the external value".
+
+        Older Zigbee2MQTT versions call it ``external``, newer ones
+        ``remote_temperature`` (next to ``local_temperature`` and
+        ``remote_source_offline``). Take it from the entity's own options.
+        """
+        if state is None:
+            return None
+        options = state.attributes.get("options") or []
+        if not options:
+            return "external"
+        for candidate in ("external", "remote_temperature"):
+            if candidate in options:
+                return candidate
+        for option in options:
+            name = str(option).lower()
+            if ("external" in name or "remote" in name) and "offline" not in name:
+                return option
+        return None
 
     async def _async_sync_target_temperature(self) -> None:
         """Keep the TRV set-point in line (TRV step is 0.5 K)."""
