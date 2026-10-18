@@ -206,6 +206,19 @@ class ThermalModel:
         u = (a * (target - outside) - c) / b
         return round(_clamp(u, 0.0, 1.0) * 100.0, 1)
 
+    def predict(self, temp: float, outside: float, demand_percent: float, hours: float) -> float:
+        """Room temperature after ``hours`` at a fixed demand."""
+        a, b, c = self.theta
+        u = _clamp(demand_percent / 100.0, 0.0, 1.0)
+        steps = max(1, math.ceil(hours / FORECAST_STEP_H))
+        dt_h = hours / steps
+        k = 1.0 - math.exp(-dt_h / max(0.05, self.floor_lag_h))
+        t, uf = temp, self.u_f
+        for _ in range(steps):
+            uf += k * (u - uf)
+            t += dt_h * (a * (outside - t) + b * uf + c)
+        return t
+
     def forecast(self, temp: float, outside: float, demand_percent: float) -> list[list[float]]:
         """Room temperature every 30 min for FORECAST_HOURS at a fixed demand."""
         a, b, c = self.theta
@@ -220,6 +233,97 @@ class ThermalModel:
             if step % FORECAST_POINT_EVERY == 0:
                 points.append([int(step * FORECAST_STEP_H * 60), round(t, 2)])
         return points
+
+
+class SkillTracker:
+    """Does the model predict the room better than the trend extrapolation?
+
+    Every control cycle both predictions for the end of the controller's
+    horizon (45 min floor, 12 min radiator) are stored; when that time has
+    come they are compared with the measured temperature. Result: rolling
+    (~12 h) prediction error of both and the model's skill in percent.
+    """
+
+    ALPHA = 1.0 / 48.0  # EMA weight per comparison (15 min) -> ~12 h
+    MIN_SAMPLES = 48
+    MAX_PENDING = 64
+
+    def __init__(self) -> None:
+        self.mse_model: float | None = None
+        self.mse_trend: float | None = None
+        self.samples = 0
+        self.pending: list[tuple[float, float, float]] = []  # (due, model, trend)
+        self._last_add: float | None = None
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "m": None if self.mse_model is None else round(self.mse_model, 6),
+            "t": None if self.mse_trend is None else round(self.mse_trend, 6),
+            "n": self.samples,
+        }
+
+    def restore(self, data: dict[str, Any] | None) -> None:
+        if not isinstance(data, dict):
+            return
+        try:
+            m, t = data.get("m"), data.get("t")
+            mse_model = None if m is None else float(m)
+            mse_trend = None if t is None else float(t)
+            samples = max(0, int(data.get("n", 0)))
+        except (TypeError, ValueError):
+            return
+        if any(v is not None and (not math.isfinite(v) or v < 0) for v in (mse_model, mse_trend)):
+            return
+        self.mse_model, self.mse_trend, self.samples = mse_model, mse_trend, samples
+
+    def discard_pending(self) -> None:
+        """A disturbance (window, draft) invalidates the open predictions."""
+        self.pending.clear()
+
+    def add(self, now: float, due: float, model: float, trend: float) -> None:
+        if self._last_add is not None and now - self._last_add < MIN_UPDATE_SPACING:
+            return
+        if not all(math.isfinite(v) for v in (model, trend)):
+            return
+        self._last_add = now
+        self.pending.append((due, model, trend))
+        del self.pending[: -self.MAX_PENDING]
+
+    def resolve(self, now: float, actual: float) -> None:
+        """Score all predictions that are due (late ones are dropped)."""
+        keep = []
+        for due, model, trend in self.pending:
+            if due > now:
+                keep.append((due, model, trend))
+            elif now - due <= MIN_UPDATE_SPACING * 1.5:
+                self._score(actual - model, actual - trend)
+        self.pending = keep
+
+    def _score(self, err_model: float, err_trend: float) -> None:
+        em, et = err_model * err_model, err_trend * err_trend
+        if self.mse_model is None or self.mse_trend is None:
+            self.mse_model, self.mse_trend = em, et
+        else:
+            self.mse_model += self.ALPHA * (em - self.mse_model)
+            self.mse_trend += self.ALPHA * (et - self.mse_trend)
+        self.samples += 1
+
+    @property
+    def rmse_model(self) -> float | None:
+        return None if self.mse_model is None else math.sqrt(self.mse_model)
+
+    @property
+    def rmse_trend(self) -> float | None:
+        return None if self.mse_trend is None else math.sqrt(self.mse_trend)
+
+    def skill(self) -> float | None:
+        """% less prediction error than the trend (negative = worse)."""
+        if self.samples < self.MIN_SAMPLES or self.mse_model is None or self.mse_trend is None:
+            return None
+        rt = math.sqrt(self.mse_trend)
+        if rt <= 1e-6:
+            return None
+        return round(100.0 * (1.0 - math.sqrt(self.mse_model) / rt))
 
 
 class ComfortTracker:

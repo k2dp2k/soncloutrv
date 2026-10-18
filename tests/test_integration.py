@@ -727,6 +727,7 @@ async def test_insight_sensors_and_model_persistence(hass: HomeAssistant, mqtt_m
     assert state.attributes["model_ready"] is True
     assert set(state.attributes["model_forecast"]) == {"hold", "off", "full"}
     assert state.attributes["comfort_samples"] > 0
+    assert state.attributes["model_skill_samples"] > 0
     # forecast curves and the confidence dict are not written to the recorder
     assert {"model_forecast", "model_confidence"} <= climate._unrecorded_attributes
     for object_id in (
@@ -736,6 +737,7 @@ async def test_insight_sensors_and_model_persistence(hass: HomeAssistant, mqtt_m
         "raummodell_heizleistung",
         "raummodell_fremdwarme",
         "raummodell_prognose_3h",
+        "raummodell_vorhersage_vorteil",
     ):
         sensor = hass.states.get(f"sensor.trv_wohn_{object_id}")
         assert sensor is not None, object_id

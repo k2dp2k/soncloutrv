@@ -164,7 +164,7 @@ sinkt die Regelabweichung dort je nach Ventilkennlinie von 1,0–2,2 K RMS auf c
 | Grundbedarf des Raums | bedingte Integration (I-Anteil mit Anti-Windup) | ja | `PID I-Anteil` |
 | Wetterabhängigkeit (% Bedarf je K innen/außen) | exponentiell geglättete Regression in ruhigen Phasen | ja | `Gelernte Wetterabhängigkeit` |
 | Versatz und Streuung des TRV-Fühlers | gleitender Mittelwert | nur bei Sensorausfall | – |
-| **Raummodell** (ab v2.5) | rekursive kleinste Quadrate mit Vergessensfaktor (Online-Systemidentifikation) | nein, Beobachtungsmodus | `Raummodell Zeitkonstante`, `Heizleistung`, `Fremdwärme`, `Prognose 3h` |
+| **Raummodell** (ab v2.5) | rekursive kleinste Quadrate mit Vergessensfaktor (Online-Systemidentifikation) | nein, Beobachtungsmodus | `Raummodell Zeitkonstante`, `Heizleistung`, `Fremdwärme`, `Prognose 3h`, `Vorhersage-Vorteil` |
 
 Die ersten drei sind adaptive Regelung. Das Raummodell ist ein lernendes Modell im Sinne von Machine Learning, aber bewusst kein neuronales Netz: Es hat drei physikalisch deutbare Parameter, lernt aus wenigen Tagen Daten, läuft auf jedem Home-Assistant-Gerät und kann sagen, wie sicher es sich ist.
 
@@ -185,7 +185,22 @@ Simulation (`tests/sim_model.py`, ClouSet-Raum, drei Wochen):
 
 Die physikalische Zeitkonstante des simulierten Raums liegt bei etwa 21 h.
 
-Neue Attribute der Klima-Entität: `model_forecast` (Temperaturverlauf der nächsten 6 h für „Ventil wie jetzt“, „Ventil zu“, „Ventil voll auf“, nicht in der Datenbank), `model_demand` (Bedarf, den das Modell für das Soll erwartet), `model_confidence`, `comfort_in_band_24h` (Anteil der letzten 24 h innerhalb ±0,3 K), `comfort_rms_24h`, `comfort_mean_24h`.
+#### Warum das Modell (noch) nicht selbst steuert
+
+Ein lernendes Modell ist nicht automatisch der bessere Regler. Für v2.6 wurden zwei Varianten, in denen das Modell mitsteuert, gegen den bestehenden Regler simuliert (ClouSet-Raum, vier Wochen von mildem Herbst bis Kältewelle, mit/ohne Nachtabsenkung, mit/ohne Zugluft, drei Ventilkennlinien, je drei Läufe):
+
+| Variante | RMS-Abweichung | größte Unterschreitung |
+|---|---|---|
+| bestehender Regler (Trend-Vorausschau, gelernter Grundbedarf + Wetteranteil) | 0,594 K | −2,58 K |
+| Modell rechnet die Vorausschau mit (nur wenn es nachweislich besser vorhersagt) | 0,600 K | −2,61 K |
+| Modell liefert den Wetteranteil (Steigung a/b statt Bedarf/ΔT), Einzellauf | schlechter: Tagesschwankung ±0,7 statt ±0,5 K | unverändert |
+| zum Vergleich: perfekte Wettervorhersage 4 h im Voraus | 0,583 K | −2,60 K |
+
+Die verbleibenden Abweichungen sind physikalisch: Der Estrich gibt Wärme Stunden später ab, als die Außentemperatur im Tagesverlauf schwankt; in der Kältewelle reicht die Heizleistung bei 36 °C Vorlauf nicht; Zugluft ist nicht vorhersehbar. Das kann auch ein Modell nicht wegrechnen. Der Integral-Anteil gleicht dagegen jeden Modellfehler sicher aus. Das ist der Grund, warum er die Regelung behält.
+
+Seit v2.6 misst die Integration deshalb im echten Raum mit, ob das Modell die Temperatur am Ende der Vorausschau (45 min, Heizkörper 12 min) genauer trifft als der Trend, auf den der Regler wirkt: Sensor `Raummodell Vorhersage-Vorteil` (% weniger Fehler als der Trend, negativ = schlechter), Attribute `model_pred_error` / `trend_pred_error` (K, gleitend über ~12 h). Zeigt sich in der Wohnung über Wochen ein klarer Vorteil, ist das die Grundlage, das Modell mitsteuern zu lassen.
+
+Neue Attribute der Klima-Entität: `model_pred_error`, `trend_pred_error`, `model_skill` (ab v2.6), `model_forecast` (Temperaturverlauf der nächsten 6 h für „Ventil wie jetzt“, „Ventil zu“, „Ventil voll auf“, nicht in der Datenbank), `model_demand` (Bedarf, den das Modell für das Soll erwartet), `model_confidence`, `comfort_in_band_24h` (Anteil der letzten 24 h innerhalb ±0,3 K), `comfort_rms_24h`, `comfort_mean_24h`.
 
 ### Steuermodi
 - **PID** (Standard) – stetig, vorausschauend, lernend
@@ -280,6 +295,14 @@ Beide über Zigbee2MQTT.
 - Der erste Durchlauf erfolgt 7 Tage nach Aktivierung
 
 ## 📄 Changelog
+
+### v2.6.0 (2026-10-18) – Prüfstand für das Raummodell 🔬
+
+Keine Migration, alle Entitäten und Lernwerte bleiben, die Regelung ist unverändert.
+
+- **Mitsteuern des Modells simuliert und verworfen**: weder in der Vorausschau noch im Wetteranteil besser als der bestehende Regler (Tabelle unter „Warum das Modell (noch) nicht selbst steuert“).
+- **Vorhersage-Vorteil**: Jeder Regelzyklus speichert die Vorhersage des Modells und die des Trends für das Ende der Vorausschau und vergleicht sie danach mit der Messung. Neuer Sensor `Raummodell Vorhersage-Vorteil` mit Langzeitstatistik.
+- 59 automatische Tests.
 
 ### v2.5.0 (2026-10-18) – Lernendes Raummodell und Auswertungen 🧠
 

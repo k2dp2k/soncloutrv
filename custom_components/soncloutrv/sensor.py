@@ -1590,6 +1590,9 @@ INSIGHT_SENSORS: tuple[tuple, ...] = (
     ("model_foreign_heat", "Raummodell Fremdwärme", "K/h", "mdi:home-import-outline", None, 2, True, ()),
     ("model_forecast_3h", "Raummodell Prognose 3h", UnitOfTemperature.CELSIUS, "mdi:crystal-ball",
      SensorDeviceClass.TEMPERATURE, 1, True, ("model_demand",)),
+    # % less prediction error than the trend the controller acts on
+    ("model_skill", "Raummodell Vorhersage-Vorteil", PERCENTAGE, "mdi:scale-balance", None, 0, True,
+     ("model_pred_error", "trend_pred_error", "model_skill_samples")),
 )
 
 
