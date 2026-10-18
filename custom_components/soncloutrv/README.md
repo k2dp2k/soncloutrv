@@ -176,7 +176,10 @@ sinkt die Regelabweichung dort je nach Ventilkennlinie von 1,0–2,2 K RMS auf c
 
 ### Fenster
 - Sensoren pro Thermostat; Wirkung „nur dieser Raum“ oder „alle SonTRV“. Ohne Sensoren: Temperatursturz-Erkennung.
-- Offen: Ventil zu, Lernen pausiert. Zu: Regelung läuft mit erhaltenen Lernwerten weiter, 1 h lang max. +10 %-Punkte gegenüber vor dem Fenster (die Luft kühlt schnell, der Estrich kaum).
+- Ein Fenster/eine Tür muss mindestens **2 min** offen sein (Option „Fenster/Tür: erst nach (s) offen reagieren“), sonst passiert nichts. Kurzes Öffnen der Wohnungstür und prellende Kontakte bewegen das Ventil nicht mehr.
+- Offen: Ventil zu, Lernen pausiert. Alle Kreise eines Raums (z. B. Wohnzimmer + Küche) werden gemeinsam eingefroren und freigegeben.
+- Zu (Fußboden): Das Ventil bleibt auf der Stellung von vor dem Lüften, bis sich die Luft vom warmen Estrich selbst erholt hat (bis 0,3 K an die Temperatur vor dem Lüften, höchstens 60 min, früher wenn die Erholung stockt). Erst danach regelt und lernt der Regler wieder. Attribut `post_window_soft_active`.
+- Zu (Heizkörper): sofort normale Regelung, der Handtuchheizkörper hilft beim Aufwärmen.
 
 ### Raum-CSV-Logging
 Optional (Optionen). Enthält Temperatur, Quelle, Vorhersage, Steigung, P/I/D/FF, gelernte Vorsteuerung, Ventil, Fenster. Eine Datei im alten v1-Format wird als `.v1.bak` beiseitegelegt.
@@ -247,6 +250,43 @@ Beide über Zigbee2MQTT.
 - Der erste Durchlauf erfolgt 7 Tage nach Aktivierung
 
 ## 📄 Changelog
+
+### v2.4.0 (2026-10-18) – Regelung aus zehn Tagen Heizbetrieb nachgeschärft 📈
+
+Grundlage: Verlauf aller 7 Kreise vom 8. bis 18. Oktober (Bedarf, I-Anteil, Vorhersage, Ventil, Fenster). Keine Migration, alle Entitäten und Lernwerte bleiben.
+
+**Befunde in den Daten**
+- Flur: Die Wohnungstür ging 10–19 mal am Tag für wenige Sekunden auf. Jede Öffnung schloss das Ventil und öffnete es danach wieder, bis zu 34 Ventilbewegungen am Tag.
+- Büro: Der Türkontakt prellte am 14.10. über eine Stunde lang im Sekundentakt.
+- Wohnzimmer + Küche: Nach dem Schließen der Balkontür rechnete der Regler 15 min mit dem Temperatureinbruch weiter (80–90 % Bedarf), weil der zweite Kreis des Raums noch eingefroren war. Danach lernte der I-Anteil aus der Erholung der Luft und der Raum lief abends über das Soll.
+- Zugluft ohne Fensterkontakt (Flur, offenes Wohnzimmer): Luftstürze von 2 K in 10 min, die sich nach 30–60 min von selbst erholen, wurden von der Vorhersage auf bis zu 3 K Regelabweichung hochgerechnet.
+- Flur und Büro lagen nachts tagelang 1–1,5 K über Soll bei geschlossenem Ventil (Nachbarwärme). Der I-Anteil blieb dabei bei 13 % stehen und öffnete das Ventil, sobald das Soll wieder erreicht war.
+
+**Änderungen**
+- **Fenster/Tür-Verzögerung** (neue Option, Standard 120 s) gegen kurze Öffnungen und prellende Kontakte.
+- **Raumweise Fensterverarbeitung**: alle Kreise eines Raums werden in einem Schritt eingefroren und freigegeben.
+- **Erholungsphase nach dem Lüften** (Fußboden): Ventil hält die Stellung von vorher, kein Lernen, bis die Luft sich erholt hat. Ersetzt die bisherige „weiche Phase“.
+- **Zugluft-Unterdrückung** (Fußboden): Die Regeltemperatur folgt der Messung höchstens mit 0,8 K/h, so schnell kann der Estrich die Luft nicht bewegen. Bei größerer Abweichung keine Vorhersage und kein Lernen (Attribut `disturbance`). Heizkörper sind davon ausgenommen.
+- **Veralteter I-Anteil wird verlernt**, solange der Raum bei geschlossenem Ventil zu warm bleibt (bis auf 0, nicht darunter).
+- **Fehler behoben**: Im Bad konnte der Handtuchheizkörper den Fußbodenregler nach einem Fenster dauerhaft eingefroren lassen (Prüfung jetzt nur auf Kreise mit demselben Regler).
+- Tests sind unabhängig vom Wochentag (der sonntägliche Verkalkungsschutz pausierte die Regelung mitten in einem Test).
+
+**Simulation** (`tests/sim_disturbances.py`, alter gegen neuen Regler)
+
+| Szenario | Kennzahl | v2.3 | v2.4 |
+|---|---|---|---|
+| Zugluft 3×/Tag | Ventilbewegungen in 7 Tagen | 205 | 144 |
+| Zugluft 3×/Tag | tiefste Untertemperatur | −1,72 K | −1,51 K |
+| Nachbarwärme + Zugluft | höchste Übertemperatur | 2,60 K | 1,36 K |
+| Nachbarwärme + Zugluft | Regelabweichung RMS | 0,86 K | 0,51 K |
+| Nachbarwärme + Zugluft | Ventilbewegungen | 148 | 100 |
+| Oktober ohne Störung | Regelabweichung RMS | 0,32 K | 0,31 K |
+
+`tests/sim_clouset.py` und `tests/sim_bath.py` bleiben im Rahmen (Abweichungen unter 0,03 K RMS). 47 automatische Tests.
+
+### v2.3.1 (2026-10-11) – Verkalkungsschutz tagsüber 🔇
+- Wöchentliches Ventil-Durchbewegen von Sonntag 03:00–03:50 auf **Sonntag 11:00–11:50** verlegt – die Stellantriebe sind hörbar und haben nachts geweckt
+- `schedule`-Attribut des Verkalkungsschutz-Switch zeigt die tatsächliche Uhrzeit
 
 ### v2.3.0 (2026-09-30) – ClouSet + Handtuchheizkörper (Bosch am Rücklauf) 🛁
 

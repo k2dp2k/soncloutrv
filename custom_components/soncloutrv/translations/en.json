@@ -124,6 +124,7 @@
           "room_id": "Room (same room shares one controller)",
           "window_sensors": "Window/door sensors",
           "window_sensor_scope": "Effect of open windows",
+          "window_open_delay": "Window/door: react only after open for (s)",
           "window_drop_threshold": "Window detection: temperature drop (K)",
           "window_stable_band": "Window detection: stability band (K)",
           "window_max_freeze": "Window: maximum pause (s)",

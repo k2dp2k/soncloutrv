@@ -136,7 +136,10 @@ class FakeTRV:
 
 
 @pytest.fixture(autouse=True)
-def _enable(enable_custom_integrations):
+def _enable(enable_custom_integrations, freezer):
+    # Fixed weekday morning: tests advance the clock by hours and must not run
+    # into the weekly valve exercise (Sunday 11:00), which pauses the control.
+    freezer.move_to("2026-10-14 06:00:00+00:00")
     yield
 
 
@@ -171,6 +174,20 @@ async def _setup(
 async def _run_cycle(hass: HomeAssistant, minutes: float = 3) -> None:
     async_fire_time_changed(hass, dt_util.utcnow() + timedelta(minutes=minutes))
     await hass.async_block_till_done()
+
+
+async def _wait(hass: HomeAssistant, freezer, seconds: float) -> None:
+    """Advance the clock (states and timers) by ``seconds``."""
+    freezer.tick(timedelta(seconds=seconds))
+    async_fire_time_changed(hass)
+    await hass.async_block_till_done()
+
+
+async def _set_window(hass: HomeAssistant, freezer, state: str, entity_id: str = WINDOW) -> None:
+    hass.states.async_set(entity_id, state, {"device_class": "window"})
+    await hass.async_block_till_done()
+    if state == "on":
+        await _wait(hass, freezer, 130)  # longer than the default open delay
 
 
 async def test_migration_from_v1_keeps_entities(hass: HomeAssistant, mqtt_mock) -> None:
@@ -277,22 +294,104 @@ async def test_control_mode_select_is_applied(hass: HomeAssistant, mqtt_mock) ->
     assert trv.last("number", "set_value", OPEN)["value"] == 40
 
 
-async def test_window_sensor_closes_and_resumes(hass: HomeAssistant, mqtt_mock) -> None:
+async def test_window_sensor_closes_and_resumes(hass: HomeAssistant, mqtt_mock, freezer) -> None:
     _, trv = await _setup(hass)
     await _run_cycle(hass)
-    assert trv.last("number", "set_value", OPEN)["value"] > 0
-    hass.states.async_set(WINDOW, "on", {"device_class": "window"})
-    await hass.async_block_till_done()
+    before = trv.last("number", "set_value", OPEN)["value"]
+    assert before > 0
+    await _set_window(hass, freezer, "on")
     assert trv.last("number", "set_value", OPEN)["value"] == 0
     assert hass.states.get("climate.trv_wohn").attributes["window_open"] is True
     climate = runtime.climate_for_entry(hass, ENTRY_ID)
     integral_before = climate._controller.integral
-    hass.states.async_set(WINDOW, "off", {"device_class": "window"})
-    await hass.async_block_till_done()
+    await _set_window(hass, freezer, "off")
     assert hass.states.get("climate.trv_wohn").attributes["window_open"] is False
-    assert trv.last("number", "set_value", OPEN)["value"] > 0
+    # back to the opening from before the window
+    assert trv.last("number", "set_value", OPEN)["value"] == before
     # learned state is kept over the window event
     assert climate._controller.integral == pytest.approx(integral_before, abs=0.5)
+
+
+async def test_short_door_opening_is_ignored(hass: HomeAssistant, mqtt_mock, freezer) -> None:
+    """Front door: a few seconds open must not move the valve."""
+    _, trv = await _setup(hass)
+    await _run_cycle(hass)
+    writes = len([c for c in trv.calls if c[2].get("entity_id") == OPEN])
+    for _ in range(5):
+        hass.states.async_set(WINDOW, "on", {"device_class": "window"})
+        await _wait(hass, freezer, 5)
+        hass.states.async_set(WINDOW, "off", {"device_class": "window"})
+        await _wait(hass, freezer, 60)
+    climate = runtime.climate_for_entry(hass, ENTRY_ID)
+    assert climate._window_freeze_active is False
+    assert len([c for c in trv.calls if c[2].get("entity_id") == OPEN]) == writes
+
+
+async def test_bouncing_contact_is_ignored(hass: HomeAssistant, mqtt_mock, freezer) -> None:
+    """Door ajar: the contact toggles every few seconds (seen on the office door)."""
+    _, trv = await _setup(hass)
+    await _run_cycle(hass)
+    for i in range(60):  # 60 toggles in ~4 min
+        hass.states.async_set(WINDOW, "on" if i % 2 == 0 else "off", {"device_class": "window"})
+        await _wait(hass, freezer, 4)
+    climate = runtime.climate_for_entry(hass, ENTRY_ID)
+    assert climate._window_freeze_active is False
+    assert trv.last("number", "set_value", OPEN)["value"] > 0
+
+
+async def test_window_recovery_holds_valve_until_air_recovered(hass: HomeAssistant, mqtt_mock, freezer) -> None:
+    """After airing, the floor circuit neither opens wide nor learns."""
+    _, trv = await _setup(hass)
+    await _run_cycle(hass)
+    before = trv.last("number", "set_value", OPEN)["value"]
+    climate = runtime.climate_for_entry(hass, ENTRY_ID)
+    integral = climate._controller.integral
+    await _set_window(hass, freezer, "on")
+    hass.states.async_set(ROOM, "18.5", {"device_class": "temperature"})  # cold air
+    await _wait(hass, freezer, 600)
+    await _set_window(hass, freezer, "off")
+    state = hass.states.get("climate.trv_wohn")
+    assert state.attributes["post_window_soft_active"] is True
+    assert trv.last("number", "set_value", OPEN)["value"] == before
+    # 2 K below target, but the valve stays where it was during the recovery
+    await _wait(hass, freezer, 16 * 60)
+    assert trv.last("number", "set_value", OPEN)["value"] == before
+    assert climate._controller.integral == pytest.approx(integral, abs=0.01)
+    # the air comes back from the warm screed -> normal control again
+    hass.states.async_set(ROOM, "20.4", {"device_class": "temperature"})
+    await _wait(hass, freezer, 16 * 60)
+    assert hass.states.get("climate.trv_wohn").attributes["post_window_soft_active"] is False
+
+
+async def test_room_mates_end_window_freeze_together(hass: HomeAssistant, mqtt_mock, freezer) -> None:
+    """Open living room: wohn + kuche share sensors and controller."""
+    _, trv = await _setup(hass)
+    base2 = "heizung_kuche_fussboden"
+    hass.states.async_set(f"climate.{base2}", "off", {"hvac_modes": ["off", "auto", "heat"], "temperature": 7})
+    hass.states.async_set(f"number.{base2}_valve_opening_degree", "0")
+    hass.states.async_set(f"number.{base2}_valve_closing_degree", "100")
+    entry2 = MockConfigEntry(
+        domain=DOMAIN, title="trv_kuche", version=CONFIG_VERSION, entry_id="01KXKZ7SKVSYSTS33R44NB22P1",
+        unique_id=f"climate.{base2}", data={**V1_DATA, "name": "trv_kuche", "valve_entity": f"climate.{base2}"},
+        options={**V1_OPTIONS, "kp": 25.0, "ki": 0.001736},
+    )
+    entry2.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry2.entry_id)
+    await hass.async_block_till_done()
+    await _run_cycle(hass)
+    c1 = runtime.climate_for_entry(hass, ENTRY_ID)
+    c2 = runtime.climate_for_entry(hass, entry2.entry_id)
+    await _set_window(hass, freezer, "on")
+    assert c1._window_freeze_active and c2._window_freeze_active
+    hass.states.async_set(ROOM, "18.5", {"device_class": "temperature"})
+    await _wait(hass, freezer, 300)
+    await _set_window(hass, freezer, "off")
+    assert not c1._window_freeze_active and not c2._window_freeze_active
+    assert c1._controller is c2._controller
+    assert c1._controller.frozen is False
+    # neither circuit reacted to the cold air with a wide opening
+    assert c1._valve_position <= 40 and c2._valve_position <= 40
+    assert c1._last_result is None or c1._last_result.demand < 80
 
 
 async def test_trv_own_window_detection_is_switched_off(hass: HomeAssistant, mqtt_mock) -> None:
@@ -309,9 +408,10 @@ async def test_trv_own_window_detection_is_switched_off(hass: HomeAssistant, mqt
     assert switched == [f"switch.{BASE}_open_window"]
 
 
-async def test_window_open_before_start_is_respected(hass: HomeAssistant, mqtt_mock) -> None:
+async def test_window_open_before_start_is_respected(hass: HomeAssistant, mqtt_mock, freezer) -> None:
     """A window that is already open at (re)start never sends an event."""
     _, trv = await _setup(hass, window="on")
+    await _wait(hass, freezer, 130)
     await _run_cycle(hass)
     state = hass.states.get("climate.trv_wohn")
     assert state.attributes["window_open"] is True
@@ -319,13 +419,13 @@ async def test_window_open_before_start_is_respected(hass: HomeAssistant, mqtt_m
     # the freeze may have written 0 before the fake TRV was installed; in no
     # case is a positive opening written
     assert all(c[2]["value"] == 0 for c in trv.calls if c[2].get("entity_id") == OPEN)
-    hass.states.async_set(WINDOW, "off", {"device_class": "window"})
-    await hass.async_block_till_done()
+    await _set_window(hass, freezer, "off")
     assert hass.states.get("climate.trv_wohn").attributes["window_open"] is False
+    await _run_cycle(hass, 16)
     assert trv.last("number", "set_value", OPEN)["value"] > 0
 
 
-async def test_missed_window_event_is_caught_by_control_cycle(hass: HomeAssistant, mqtt_mock) -> None:
+async def test_missed_window_event_is_caught_by_control_cycle(hass: HomeAssistant, mqtt_mock, freezer) -> None:
     _, trv = await _setup(hass)
     await _run_cycle(hass)
     climate = runtime.climate_for_entry(hass, ENTRY_ID)
@@ -336,7 +436,8 @@ async def test_missed_window_event_is_caught_by_control_cycle(hass: HomeAssistan
     hass.states.async_set(WINDOW, "on", {"device_class": "window"})
     await hass.async_block_till_done()
     assert climate._window_freeze_active is False
-    await _run_cycle(hass, 20)
+    freezer.tick(timedelta(minutes=20))
+    await _run_cycle(hass, 0)
     assert climate._window_freeze_active is True
     assert trv.last("number", "set_value", OPEN)["value"] == 0
 
@@ -349,20 +450,20 @@ async def test_silent_sensor_stays_trusted_when_plausible(hass: HomeAssistant, m
     assert climate._local_offset == pytest.approx(-1.5)
     freezer.tick(timedelta(hours=5))  # > sensor_timeout (4 h), room sensor silent
     hass.states.async_set(LOCAL, "22.1", {"device_class": "temperature"}, force_update=True)
-    await _run_cycle(hass, 0.1)
+    await _wait(hass, freezer, 16 * 60)
     state = hass.states.get("climate.trv_wohn")
     assert state.attributes["temperature_source"] == "sensor"
     assert state.attributes["sensor_stale"] is True
     assert state.attributes["current_temperature"] == 20.5
     # the TRV sensor says the room moved by 2 K -> the silent sensor is stale
     hass.states.async_set(LOCAL, "24.0", {"device_class": "temperature"}, force_update=True)
-    await _run_cycle(hass, 16)
+    await _wait(hass, freezer, 16 * 60)
     state = hass.states.get("climate.trv_wohn")
     assert state.attributes["temperature_source"] == "trv_sensor"
     assert state.attributes["current_temperature"] == pytest.approx(22.5, abs=0.05)
     # a fresh report restores the sensor as the source
     hass.states.async_set(ROOM, "22.4", {"device_class": "temperature"}, force_update=True)
-    await _run_cycle(hass, 16)
+    await _wait(hass, freezer, 16 * 60)
     state = hass.states.get("climate.trv_wohn")
     assert state.attributes["temperature_source"] == "sensor"
     assert state.attributes["sensor_stale"] is False
@@ -421,6 +522,27 @@ async def test_radiator_next_to_floor_loop_assists_only(hass: HomeAssistant, mqt
     assert hass.states.get("climate.trv_handtuch").attributes["heater_role"] == "assist"
     # the assist heater never learns an integral of its own
     assert t._controller.integral == 0.0
+
+
+async def test_bath_window_unfreezes_both_controllers(hass: HomeAssistant, mqtt_mock, freezer) -> None:
+    """Floor and towel radiator share the room but not the controller."""
+    trv = FakeTRV(hass)
+    trv.setup_states(room=20.5)
+    hass.states.async_set("binary_sensor.fenster_bad", "off", {"device_class": "window"})
+    floor, towel, base = await _setup_bath(hass, trv)
+    for entry in (floor, towel):
+        hass.config_entries.async_update_entry(
+            entry, options={**entry.options, "window_sensors": ["binary_sensor.fenster_bad"]}
+        )
+    await hass.async_block_till_done()
+    await _run_cycle(hass)
+    f = runtime.climate_for_entry(hass, floor.entry_id)
+    t = runtime.climate_for_entry(hass, towel.entry_id)
+    await _set_window(hass, freezer, "on", "binary_sensor.fenster_bad")
+    assert f._window_freeze_active and t._window_freeze_active
+    await _set_window(hass, freezer, "off", "binary_sensor.fenster_bad")
+    assert f._controller.frozen is False
+    assert t._controller.frozen is False
 
 
 async def test_heater_role_can_be_forced_primary(hass: HomeAssistant, mqtt_mock) -> None:
@@ -602,16 +724,14 @@ async def test_no_temperature_holds_learned_demand(hass: HomeAssistant, mqtt_moc
     assert trv.last("number", "set_value", OPEN)["value"] == 10
 
 
-async def test_global_window_scope_keeps_all_frozen(hass: HomeAssistant, mqtt_mock) -> None:
+async def test_global_window_scope_keeps_all_frozen(hass: HomeAssistant, mqtt_mock, freezer) -> None:
     options = {**V1_OPTIONS, "window_sensor_scope": "all"}
     _, trv = await _setup(hass, options=options)
     await _run_cycle(hass)
     climate = runtime.climate_for_entry(hass, ENTRY_ID)
-    hass.states.async_set(WINDOW, "on", {"device_class": "window"})
-    await hass.async_block_till_done()
+    await _set_window(hass, freezer, "on")
     assert climate._window_freeze_active
-    hass.states.async_set(WINDOW, "off", {"device_class": "window"})
-    await hass.async_block_till_done()
+    await _set_window(hass, freezer, "off")
     assert not climate._window_freeze_active
 
 

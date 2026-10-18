@@ -92,10 +92,58 @@ def test_cutoff_unlearns_positive_integral_but_not_below_zero():
         now += 900
     assert res.demand == 0.0
     assert ctrl.integral >= -0.01
-    # a normal winter day afterwards starts from a neutral integral
-    ctrl.add_temperature(now, 20.9)
-    res = ctrl.compute(now, 21.5)
+    # a normal winter day afterwards starts from a neutral integral: the room
+    # cools down at a realistic 0.3 K/h and the valve opens below the target
+    temp = 24.0
+    while temp > 20.9:
+        temp -= 0.075
+        ctrl.add_temperature(now, round(temp, 2))
+        res = ctrl.compute(now, 21.5)
+        now += 900
     assert res.demand > 0
+
+
+def test_rate_limiter_ignores_drafts_but_follows_real_cooling():
+    """Screed floors cannot move the air faster than ~0.8 K/h."""
+    ctrl = RoomController("r")
+    ctrl.integral = 10.0
+    now = 0.0
+    for _ in range(8):
+        ctrl.add_temperature(now, 21.5)
+        ctrl.compute(now, 21.5)
+        now += 900
+    integral = ctrl.integral
+    # a draft: the air drops by 2 K within one cycle
+    ctrl.add_temperature(now - 300, 19.5)
+    res = ctrl.compute(now, 21.5)
+    assert res.disturbance is True
+    assert res.temperature == 21.5 - 0.2  # 0.8 K/h * 15 min
+    assert res.demand < 30.0  # the old controller asked for ~85 %
+    assert ctrl.integral == integral  # nothing learned from the draft
+    # the air recovers by itself -> back to normal
+    ctrl.add_temperature(now + 600, 21.5)
+    res = ctrl.compute(now + 900, 21.5)
+    assert res.disturbance is False
+    # a radiator profile is not limited
+    rad = RoomController("x", settings=ControllerSettings(heating_type="radiator"))
+    rad.add_temperature(0, 21.5)
+    rad.compute(0, 21.5)
+    rad.add_temperature(300, 19.5)
+    assert abs(rad.compute(600, 21.5).temperature - 19.5) <= 0.15  # trend smoothing only
+
+
+def test_stale_integral_is_unlearned_while_room_stays_warm():
+    """Neighbours heat the room: the closed valve must not keep a high integral."""
+    ctrl = RoomController("r")
+    ctrl.integral = 13.0
+    now = 0.0
+    for _ in range(4 * 12):  # 12 h at +1.2 K, valve shut
+        ctrl.add_temperature(now, 23.7)
+        res = ctrl.compute(now, 22.5)
+        now += 900
+    assert res.demand == 0.0
+    assert ctrl.integral < 3.0
+    assert ctrl.integral >= 0.0
 
 
 def test_binary_mode_hysteresis():

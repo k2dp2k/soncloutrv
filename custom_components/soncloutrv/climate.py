@@ -100,6 +100,7 @@ from .const import (
     CONF_WEATHER_ENTITY,
     CONF_WINDOW_DROP_THRESHOLD,
     CONF_WINDOW_MAX_FREEZE,
+    CONF_WINDOW_OPEN_DELAY,
     CONF_WINDOW_SENSOR_SCOPE,
     CONF_WINDOW_SENSORS,
     CONF_WINDOW_STABLE_BAND,
@@ -121,6 +122,7 @@ from .const import (
     DEFAULT_VALVE_MIN_OPENING,
     DEFAULT_WINDOW_DROP_THRESHOLD,
     DEFAULT_WINDOW_MAX_FREEZE,
+    DEFAULT_WINDOW_OPEN_DELAY,
     DEFAULT_WINDOW_STABLE_BAND,
     DOMAIN,
     EXT_TEMP_REFRESH_INTERVAL,
@@ -160,10 +162,16 @@ HEATING_TYPES = [HEATING_TYPE_FLOOR, HEATING_TYPE_RADIATOR]
 
 # Window detection by temperature drop
 WINDOW_DROP_WINDOW = 300  # seconds to look back
-# After a window closed: limit the opening for this long ...
-POST_WINDOW_SOFT_DURATION = 3600
-# ... to the opening before the event plus this step (percentage points)
-POST_WINDOW_MAX_STEP = 10
+# After a window closed (floor heating): the air recovers from the warm
+# screed by itself within 20-60 min (real data: 2 K in ~30 min). The valve is
+# held at its pre-window opening and nothing is learned until the air is back
+# within RECOVERY_BAND of the pre-window temperature, the recovery stalls
+# (slower than RECOVERY_STALL_SLOPE after RECOVERY_STALL_AFTER) or
+# RECOVERY_MAX has passed.
+RECOVERY_MAX = 3600
+RECOVERY_BAND = 0.3  # K
+RECOVERY_STALL_AFTER = 1200
+RECOVERY_STALL_SLOPE = 0.3  # K/h
 # Minimum distance between two controller runs of one room.
 MIN_COMPUTE_SPACING = 60
 # Exercise timing
@@ -330,6 +338,7 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
         self._window_drop_threshold = DEFAULT_WINDOW_DROP_THRESHOLD
         self._window_stable_band = DEFAULT_WINDOW_STABLE_BAND
         self._window_max_freeze = DEFAULT_WINDOW_MAX_FREEZE
+        self._window_open_delay = DEFAULT_WINDOW_OPEN_DELAY
         self._room_logging_enabled = DEFAULT_ROOM_LOGGING_ENABLED
         self._room_log_path = hass.config.path(DEFAULT_ROOM_LOG_FILE)
         self._load_settings()
@@ -378,7 +387,7 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
         self._window_by_sensor = False
         self._window_min_temp: float | None = None
         self._pre_window_valve_opening: int | None = None
-        self._post_window_soft_mode_until: float | None = None
+        self._window_check_unsub: CALLBACK_TYPE | None = None
 
     # ------------------------------------------------------------------
     # Settings
@@ -441,6 +450,9 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
         )
         self._window_max_freeze = int(
             _to_float(conf.get(CONF_WINDOW_MAX_FREEZE), DEFAULT_WINDOW_MAX_FREEZE)
+        )
+        self._window_open_delay = int(
+            max(0, min(1800, _to_float(conf.get(CONF_WINDOW_OPEN_DELAY), DEFAULT_WINDOW_OPEN_DELAY)))
         )
         self._room_logging_enabled = bool(
             conf.get(CONF_ROOM_LOGGING_ENABLED, DEFAULT_ROOM_LOGGING_ENABLED)
@@ -592,7 +604,7 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
             # A window that was already open before the (re)start never
             # produces a state change event - check the sensors now.
             if self._any_window_open():
-                self.hass.async_create_task(self._async_start_window_freeze(by_sensor=True))
+                self.hass.async_create_task(self._async_evaluate_windows())
             self._schedule_next(stagger)
 
         self.async_on_remove(async_at_started(self.hass, _start))
@@ -602,6 +614,7 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
         self._removed = True
         self._cancel_next()
         self._cancel_pwm()
+        self._cancel_window_check()
         if self._exercise_task is not None:
             self._exercise_task.cancel()
             self._exercise_task = None
@@ -909,8 +922,9 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
 
         # ----- window -----
         if not self._window_freeze_active and self._any_window_open():
-            # Missed event (restart, Zigbee hiccup): the sensors are the truth.
-            await self._async_start_window_freeze(by_sensor=True)
+            # Missed event (restart, Zigbee hiccup): the sensors are the truth
+            # (still honouring the open delay).
+            await self._async_evaluate_windows()
         if self._window_freeze_active:
             if self._is_window_freeze_over(now):
                 await self._async_end_window_freeze()
@@ -920,6 +934,21 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
                 self._active = False
                 self._log_row(now)
                 return
+        if self._controller is not None and self._controller.frozen and self._room_mate_frozen():
+            # A circuit of the same room is still in a window freeze.
+            self._demand = 0.0
+            await self._async_write_valve(0, force=force_write)
+            self._active = False
+            self._log_row(now)
+            return
+        if self._recovery_active(now):
+            opening = min(self._pre_window_valve_opening or 0, self._max_valve_position)
+            await self._async_write_valve(opening, force=force_write)
+            self._active = opening > 0
+            await self._async_sync_external_temperature()
+            await self._async_sync_target_temperature()
+            self._log_row(now)
+            return
 
         # ----- controller -----
         ctrl = self._controller
@@ -979,7 +1008,6 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
         )
         if self._control_mode == CONTROL_MODE_BINARY or assist:
             opening = self._max_valve_position if self._demand > 0 else 0
-        opening = self._apply_post_window_limit(now, opening)
         await self._async_write_valve(opening, force=force_write)
         self._active = opening > 0
         await self._async_sync_external_temperature()
@@ -1031,15 +1059,51 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
             c._attr_hvac_mode == HVACMode.OFF for c in runtime.room_climates(self.hass, self._room_key)
         )
 
-    def _apply_post_window_limit(self, now: float, opening: int) -> int:
-        if self._post_window_soft_mode_until is None:
-            return opening
-        if now >= self._post_window_soft_mode_until:
-            self._post_window_soft_mode_until = None
-            self._pre_window_valve_opening = None
-            return opening
-        limit = (self._pre_window_valve_opening or 0) + POST_WINDOW_MAX_STEP
-        return min(opening, limit, self._max_valve_position)
+    def _room_mate_frozen(self) -> bool:
+        """A circuit sharing this controller is still in a window freeze.
+
+        Only circuits with the same controller count: in the bathroom the
+        floor loop and the towel radiator share the room but not the
+        controller, and the radiator must not keep the floor frozen.
+        """
+        return any(
+            c._window_freeze_active
+            for c in runtime.room_climates(self.hass, self._room_key)
+            if c is not self and c._controller is self._controller
+        )
+
+    @property
+    def _recovery_running(self) -> bool:
+        ctrl = self._controller
+        return bool(ctrl is not None and ctrl.recovery_start is not None)
+
+    def _recovery_active(self, now: float) -> bool:
+        """Post-window recovery of a floor circuit (see RECOVERY_*)."""
+        ctrl = self._controller
+        if ctrl is None or ctrl.recovery_start is None:
+            return False
+        elapsed = now - ctrl.recovery_start
+        temp = self._attr_current_temperature
+        ref = ctrl.window_ref_temp
+        _, slope = ctrl.trend.estimate(now)
+        done = (
+            elapsed >= RECOVERY_MAX
+            or elapsed < 0
+            or temp is None
+            or ref is None
+            or temp >= ref - RECOVERY_BAND
+            or (elapsed >= RECOVERY_STALL_AFTER and slope < RECOVERY_STALL_SLOPE)
+        )
+        if not done:
+            return True
+        _LOGGER.info("%s: air recovered after the window (%.0f min) - resuming control", self.name, elapsed / 60)
+        ctrl.recovery_start = None
+        ctrl.window_ref_temp = None
+        # Start the trend and the rate limiter from the recovered air: the
+        # recovery ramp is not a property of the floor.
+        ctrl.reset_transients()
+        self._ingest_room_temperature(self.hass.states.get(self._temp_sensor))
+        return False
 
     # ----- PWM ---------------------------------------------------------
     @callback
@@ -1064,7 +1128,6 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
                 self._pwm_unsub = async_call_later(self.hass, self._pwm_on_s, _pwm_off)
         elapsed = now - self._pwm_period_start
         opening = self._max_valve_position if elapsed < self._pwm_on_s else 0
-        opening = self._apply_post_window_limit(now, opening)
         await self._async_write_valve(opening, force=force_write, deadband=0)
         self._active = opening > 0
         await self._async_sync_external_temperature()
@@ -1084,16 +1147,34 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
     # Window handling
     # ------------------------------------------------------------------
     async def _async_window_sensor_changed(self, event: Event) -> None:
-        is_open = self._own_window_open()
         if self._window_sensor_scope == WINDOW_SCOPE_ALL:
             targets = runtime.all_climates(self.hass)
         else:
             targets = runtime.room_climates(self.hass, self._room_key) or [self]
+        # Handle all circuits of the room in one go: none of them may run a
+        # control cycle while a room mate still believes the window is open
+        # (shared controller: wohn + kuche).
         for entity in targets:
-            if entity is self:
-                await self._async_handle_window(is_open)
-            else:
-                self.hass.async_create_task(entity._async_handle_window(is_open))
+            await entity._async_evaluate_windows()
+
+    def _relevant_window_sensors(self) -> list[str]:
+        """Own sensors, room mates' sensors and sensors with global scope."""
+        ids = list(self._window_sensors)
+        for other in runtime.all_climates(self.hass):
+            if other is self:
+                continue
+            if other._room_key == self._room_key or other._window_sensor_scope == WINDOW_SCOPE_ALL:
+                ids.extend(e for e in other._window_sensors if e not in ids)
+        return ids
+
+    def _window_open_duration(self, now: float) -> float | None:
+        """How long the longest open relevant sensor has been open, else None."""
+        durations = []
+        for entity_id in self._relevant_window_sensors():
+            state = self.hass.states.get(entity_id)
+            if state is not None and state.state == "on":
+                durations.append(max(0.0, now - state.last_changed.timestamp()))
+        return max(durations) if durations else None
 
     def _own_window_open(self) -> bool:
         for entity_id in self._window_sensors:
@@ -1104,34 +1185,69 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
 
     def _any_window_open(self) -> bool:
         """Own sensors, room mates' sensors, or any sensor with global scope."""
-        if self._own_window_open():
-            return True
-        for other in runtime.all_climates(self.hass):
-            if other is self:
-                continue
-            same_room = other._room_key == self._room_key
-            if (same_room or other._window_sensor_scope == WINDOW_SCOPE_ALL) and other._own_window_open():
-                return True
-        return False
+        return self._window_open_duration(_now_ts()) is not None
 
-    async def _async_handle_window(self, is_open: bool) -> None:
-        if is_open:
-            await self._async_start_window_freeze(by_sensor=True)
-        elif self._window_freeze_active and self._window_by_sensor:
-            if not self._any_window_open():
+    @callback
+    def _cancel_window_check(self) -> None:
+        if self._window_check_unsub is not None:
+            self._window_check_unsub()
+            self._window_check_unsub = None
+
+    async def _async_evaluate_windows(self) -> None:
+        """Start / end the window freeze from the sensor states (debounced).
+
+        A window has to be open for ``window_open_delay`` seconds before the
+        valve closes; shorter openings (front door, bouncing contacts) are
+        ignored. Closing ends the freeze at once.
+        """
+        if self._removed:
+            return
+        now = _now_ts()
+        duration = self._window_open_duration(now)
+        self._cancel_window_check()
+        if duration is None:
+            if self._window_freeze_active and self._window_by_sensor:
                 await self._async_end_window_freeze()
                 self._request_control("window_closed")
+            return
+        if self._window_freeze_active:
+            self._window_by_sensor = True
+            return
+        if duration >= self._window_open_delay:
+            await self._async_start_window_freeze(by_sensor=True)
+            return
+
+        @callback
+        def _check(_now) -> None:
+            self._window_check_unsub = None
+            self.hass.async_create_task(self._async_evaluate_windows())
+
+        self._window_check_unsub = async_call_later(
+            self.hass, self._window_open_delay - duration + 1, _check
+        )
+        self._update_extra_attributes()
+        self.async_write_ha_state()
 
     async def _async_start_window_freeze(self, *, by_sensor: bool) -> None:
         if not self._window_freeze_active:
-            self._pre_window_valve_opening = self._valve_position
+            if not self._recovery_running:
+                self._pre_window_valve_opening = self._valve_position
             self._window_freeze_active = True
             self._window_by_sensor = by_sensor
             self._window_freeze_start = dt_util.now()
             self._window_min_temp = self._attr_current_temperature
-            self._post_window_soft_mode_until = None
-            if self._controller is not None:
-                self._controller.frozen = True
+            ctrl = self._controller
+            if ctrl is not None:
+                if ctrl.recovery_start is not None:
+                    # Window again during the recovery: keep the original
+                    # reference temperature and the opening from before.
+                    self._pre_window_valve_opening = (
+                        self._pre_window_valve_opening if self._pre_window_valve_opening is not None else 0
+                    )
+                    ctrl.recovery_start = None
+                elif not ctrl.frozen or ctrl.window_ref_temp is None:
+                    ctrl.window_ref_temp = self._attr_current_temperature
+                ctrl.frozen = True
             _LOGGER.info("%s: window open -> valve closed, learning frozen", self.name)
         elif by_sensor:
             self._window_by_sensor = True
@@ -1148,20 +1264,20 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
         self._window_by_sensor = False
         self._window_freeze_start = None
         self._window_min_temp = None
-        # The screed is still warm - the air cooled quickly. Keep the learned
-        # integral, but limit the opening for a while so the controller does
-        # not react to the cold air with full power.
-        self._post_window_soft_mode_until = _now_ts() + POST_WINDOW_SOFT_DURATION
-        if self._controller is not None and not any(
-            c._window_freeze_active for c in runtime.room_climates(self.hass, self._room_key) if c is not self
-        ):
-            self._controller.frozen = False
+        ctrl = self._controller
+        if ctrl is not None and not self._room_mate_frozen():
+            ctrl.frozen = False
             # The trend saw the window dip - forget it so the prediction does
             # not over-react to the recovery slope.
-            self._controller.trend.clear()
-            state = self.hass.states.get(self._temp_sensor)
-            self._ingest_room_temperature(state)
-        _LOGGER.info("%s: window closed -> resuming control (soft phase)", self.name)
+            ctrl.reset_transients()
+            self._ingest_room_temperature(self.hass.states.get(self._temp_sensor))
+            if self._heating_type == HEATING_TYPE_FLOOR and ctrl.window_ref_temp is not None:
+                # The screed is still warm, only the air cooled: hold the
+                # valve until the air has recovered by itself.
+                ctrl.recovery_start = _now_ts()
+            else:
+                ctrl.window_ref_temp = None
+        _LOGGER.info("%s: window closed -> resuming control", self.name)
 
     def _is_window_freeze_over(self, now: float) -> bool:
         if not self._window_freeze_active:
@@ -1437,7 +1553,7 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
             int(bool(r and r.learning)),
             int(bool(ctrl and ctrl.no_heat_supply)),
             int(self._window_freeze_active),
-            int(self._post_window_soft_mode_until is not None),
+            int(self._recovery_running),
             self._trv_internal_temp,
             self._reported_opening,
             int(self._trv_sensor_trusted),
@@ -1530,7 +1646,10 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
             "window_drop_threshold": self._window_drop_threshold,
             "window_stable_band": self._window_stable_band,
             "window_max_freeze": self._window_max_freeze,
-            "post_window_soft_active": self._post_window_soft_mode_until is not None,
+            "post_window_soft_active": self._recovery_running,
+            "window_open_pending": self._window_check_unsub is not None,
+            "window_open_delay": self._window_open_delay,
+            "disturbance": bool(r and getattr(r, "disturbance", False)),
         }
         if self._attr_current_temperature is not None and self._attr_target_temperature is not None:
             attrs[ATTR_TEMPERATURE_DIFFERENCE] = round(
@@ -1714,6 +1833,9 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
             "trv_sensor_trusted": self._trv_sensor_trusted,
             "valve_resend_count": self._valve_resend_count,
             "window_freeze_active": self._window_freeze_active,
+            "window_open_delay": self._window_open_delay,
+            "window_check_pending": self._window_check_unsub is not None,
+            "recovery_running": self._recovery_running,
             "controller": None if ctrl is None else {
                 **ctrl.as_dict(),
                 "no_heat_supply": ctrl.no_heat_supply,

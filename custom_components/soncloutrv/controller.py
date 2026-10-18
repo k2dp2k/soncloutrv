@@ -77,6 +77,12 @@ class HeatingProfile:
     integration_band: float  # |error| in K within which the integral learns
     pwm_period_s: int  # period for the PWM mode
     ff_learn_tau_s: float  # time constant for feed-forward learning
+    # Fastest rate (K/h) at which the heating itself can move the room air.
+    # Faster changes are air disturbances (door, draft, balcony door in an
+    # open living room) that the screed evens out by itself within 30-60 min:
+    # the controlled temperature is rate limited to this value and the
+    # integral does not learn while such a disturbance is visible.
+    max_air_rate: float | None = None  # None = no limit (radiators)
 
 
 PROFILES: dict[str, HeatingProfile] = {
@@ -91,6 +97,7 @@ PROFILES: dict[str, HeatingProfile] = {
         integration_band=0.8,
         pwm_period_s=60 * 60,
         ff_learn_tau_s=24 * 3600,
+        max_air_rate=0.8,
     ),
     # Radiator / towel radiator. Ti = 40 min.
     HEATING_TYPE_RADIATOR: HeatingProfile(
@@ -102,6 +109,8 @@ PROFILES: dict[str, HeatingProfile] = {
         integration_band=1.0,
         pwm_period_s=20 * 60,
         ff_learn_tau_s=12 * 3600,
+        # A radiator moves the air quickly itself; no rate limit.
+        max_air_rate=None,
     ),
 }
 
@@ -118,6 +127,8 @@ def get_profile(heating_type: str | None) -> HeatingProfile:
 # then delay the heat-up in autumn by hours.
 INTEGRAL_MIN = -25.0
 INTEGRAL_MAX = 100.0
+# |measured - rate limited temperature| above which a disturbance is assumed.
+DISTURBANCE_BAND = 0.3  # K
 
 
 # Gains that earlier versions wrote into the options as defaults. When the
@@ -285,6 +296,9 @@ class ControllerResult:
     learning: bool
     no_heat_supply: bool
     reason: str = ""
+    # measured air temperature deviates from the rate limited (controlled)
+    # temperature by more than DISTURBANCE_BAND: draft / door, not heating
+    disturbance: bool = False
 
 
 @dataclass
@@ -303,9 +317,41 @@ class RoomController:
     no_heat_supply: bool = False
     _outside_filtered: float | None = None
     _outside_ts: float | None = None
+    # rate limited temperature the controller acts on (see max_air_rate)
+    _t_ctrl: float | None = None
+    _t_ctrl_ts: float | None = None
+    # Window handling (room level, not persisted): temperature before the
+    # first circuit of the room froze, and the start of the recovery phase
+    # after the window closed.
+    window_ref_temp: float | None = None
+    recovery_start: float | None = None
 
     def __post_init__(self) -> None:
         self.trend = TemperatureTrend(self.settings.profile.slope_window_s)
+
+    def reset_transients(self) -> None:
+        """Forget the trend and the rate limiter (after a window event)."""
+        self.trend.clear()
+        self._t_ctrl = None
+        self._t_ctrl_ts = None
+
+    def _rate_limited(self, now: float, temp: float) -> float:
+        """Follow ``temp`` at most with the profile's max_air_rate."""
+        rate = self.settings.profile.max_air_rate
+        if rate is None:
+            self._t_ctrl = temp
+        elif (
+            self._t_ctrl is None
+            or self._t_ctrl_ts is None
+            or now < self._t_ctrl_ts
+            or now - self._t_ctrl_ts > 2 * 3600
+        ):
+            self._t_ctrl = temp
+        else:
+            step = rate * (now - self._t_ctrl_ts) / 3600.0
+            self._t_ctrl += clamp(temp - self._t_ctrl, -step, step)
+        self._t_ctrl_ts = now
+        return self._t_ctrl
 
     # --- configuration -------------------------------------------------
     def apply_settings(self, settings: ControllerSettings) -> None:
@@ -423,11 +469,21 @@ class RoomController:
             self.last_result = result
             return result
 
+        measured = temp
+        temp = self._rate_limited(now, measured)
+        disturbance = abs(measured - temp) > DISTURBANCE_BAND
+        # The prediction may not extrapolate faster than the heating can
+        # move the air - a draft would otherwise look like a 1 K deficit.
         slope = clamp(slope, -3.0, 3.0)
+        max_rate = profile.max_air_rate if profile.max_air_rate is not None else 3.0
+        pred_slope = clamp(slope, -max_rate, max_rate)
+        if disturbance:
+            # The trend currently describes the draft, not the floor.
+            pred_slope = 0.0
         error = target - temp
         horizon_h = s.horizon_s / 3600.0
         # Limit how far we look ahead so a sensor glitch cannot flip the output.
-        predicted_shift = clamp(slope * horizon_h, -1.0, 1.0)
+        predicted_shift = clamp(pred_slope * horizon_h, -1.0, 1.0)
         predicted_error = target - (temp + predicted_shift)
 
         if mode == CONTROL_MODE_PROPORTIONAL:
@@ -490,7 +546,9 @@ class RoomController:
         cut_off = error < -overtemp_limit and predicted_error < -overtemp_limit
 
         learning = False
-        can_learn = heating_enabled and not self.frozen and 0 < dt <= 3 * profile.interval_s
+        can_learn = (
+            heating_enabled and not self.frozen and not disturbance and 0 < dt <= 3 * profile.interval_s
+        )
         # Conditional integration: learn freely close to the set-point. Further
         # away only learn while the room is not already moving towards the
         # target by itself (otherwise a heat-up after a set-back would wind the
@@ -500,7 +558,11 @@ class RoomController:
         if can_learn and not self.no_heat_supply and (in_band or stuck):
             # Anti-windup: do not integrate further into a saturated output.
             pushing_up = error > 0 and unclamped >= 100.0
-            pushing_down = error < 0 and unclamped <= 0.0
+            # A positive integral may always be unlearned while the room stays
+            # too warm by itself (neighbours, sun, internal gains): otherwise a
+            # stale integral is kept for days behind the closed valve and opens
+            # it as soon as the room reaches the target again.
+            pushing_down = error < 0 and unclamped <= 0.0 and self.integral <= 0.0
             # While the valve is shut by the cut-off there is nothing left to
             # unlearn once the integral is at or below zero (summer, long sunny
             # phases): a further negative integral would only delay the next
@@ -509,7 +571,12 @@ class RoomController:
                 pushing_down = True
             if not (pushing_up or pushing_down):
                 rate = 1.0 if in_band else 0.5
-                self.integral += s.ki * error * dt * rate
+                step = s.ki * error * dt * rate
+                if error < 0 and unclamped <= 0.0 and self.integral > 0.0:
+                    # unlearning behind a closed valve stops at zero
+                    self.integral = max(0.0, self.integral + step)
+                else:
+                    self.integral += step
                 learning = True
         # The integral alone may never exceed the actuator range.
         self.integral = clamp(self.integral, INTEGRAL_MIN, INTEGRAL_MAX)
@@ -539,6 +606,7 @@ class RoomController:
             learning=learning,
             no_heat_supply=self.no_heat_supply,
             reason=reason,
+            disturbance=disturbance,
         )
         self.last_result = result
         return result

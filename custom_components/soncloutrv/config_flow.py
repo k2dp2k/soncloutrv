@@ -45,6 +45,8 @@ from .const import (
     DEFAULT_WINDOW_MAX_FREEZE,
     CONF_WINDOW_SENSORS,
     CONF_WINDOW_SENSOR_SCOPE,
+    CONF_WINDOW_OPEN_DELAY,
+    DEFAULT_WINDOW_OPEN_DELAY,
     WINDOW_SCOPE_LOCAL,
     WINDOW_SCOPE_ALL,
     CONFIG_VERSION,
@@ -346,6 +348,10 @@ class SonClouTRVOptionsFlow(config_entries.OptionsFlow):
                         mode=selector.SelectSelectorMode.DROPDOWN,
                     )
                 ),
+                vol.Required(
+                    CONF_WINDOW_OPEN_DELAY,
+                    default=current.get(CONF_WINDOW_OPEN_DELAY, DEFAULT_WINDOW_OPEN_DELAY),
+                ): vol.All(vol.Coerce(int), vol.Range(min=0, max=1800)),
                 vol.Required(
                     CONF_WINDOW_DROP_THRESHOLD,
                     default=current.get(CONF_WINDOW_DROP_THRESHOLD, DEFAULT_WINDOW_DROP_THRESHOLD),

@@ -216,6 +216,7 @@
           "room_id": "Raum (gleiche Räume teilen einen Regler)",
           "window_sensors": "Fenster-/Türsensoren",
           "window_sensor_scope": "Wirkung offener Fenster",
+          "window_open_delay": "Fenster/Tür: erst nach (s) offen reagieren",
           "window_drop_threshold": "Fenstererkennung: Temperatursturz (K)",
           "window_stable_band": "Fenstererkennung: Stabilitätsband (K)",
           "window_max_freeze": "Fenster: maximale Pause (s)",
