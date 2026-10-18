@@ -157,6 +157,36 @@ Vorlaufdruck, Sonne, Tagesgang außen) ermittelt: `python3 tests/sim_clouset.py`
 sinkt die Regelabweichung dort je nach Ventilkennlinie von 1,0–2,2 K RMS auf ca. 0,3 K RMS bei
 4–5× weniger Ventilbewegungen.
 
+### Was der Regler lernt (und ob das Machine Learning ist)
+
+| Gelernt | Verfahren | Wirkt auf die Regelung | Sensor (Lernkurve) |
+|---|---|---|---|
+| Grundbedarf des Raums | bedingte Integration (I-Anteil mit Anti-Windup) | ja | `PID I-Anteil` |
+| Wetterabhängigkeit (% Bedarf je K innen/außen) | exponentiell geglättete Regression in ruhigen Phasen | ja | `Gelernte Wetterabhängigkeit` |
+| Versatz und Streuung des TRV-Fühlers | gleitender Mittelwert | nur bei Sensorausfall | – |
+| **Raummodell** (ab v2.5) | rekursive kleinste Quadrate mit Vergessensfaktor (Online-Systemidentifikation) | nein, Beobachtungsmodus | `Raummodell Zeitkonstante`, `Heizleistung`, `Fremdwärme`, `Prognose 3h` |
+
+Die ersten drei sind adaptive Regelung. Das Raummodell ist ein lernendes Modell im Sinne von Machine Learning, aber bewusst kein neuronales Netz: Es hat drei physikalisch deutbare Parameter, lernt aus wenigen Tagen Daten, läuft auf jedem Home-Assistant-Gerät und kann sagen, wie sicher es sich ist.
+
+**Raummodell**: `dT/dt = a·(T_außen − T) + b·u_Estrich + c`
+- `1/a` – Zeitkonstante des Raums in Stunden (wie schnell er ohne Heizung auskühlt),
+- `b` – wie schnell volle Heizleistung den Raum erwärmt (K/h), `u_Estrich` ist der Heizbedarf, verzögert um die Speicherzeit des Estrichs (2 h, Heizkörper 15 min),
+- `c` – Wärme, die nicht von dieser Heizung kommt: Nachbarn, Sonne, Personen, Geräte (K/h).
+
+Gelernt wird nur in ungestörten Phasen (kein Fenster, keine Zugluft, keine Erholungsphase). Prognosen erscheinen nach einem Tag Lernzeit (96 Regelzyklen). Bei mildem Wetter ist das Ventil meist zu: Dann kann `b` nicht gelernt werden, und das Modell meldet eine niedrige Sicherheit (`confidence`), statt einen Wert zu erfinden.
+
+Simulation (`tests/sim_model.py`, ClouSet-Raum, drei Wochen):
+
+| Woche | gelernte Zeitkonstante | 3-h-Prognosefehler Modell | 3-h-Prognosefehler „bleibt gleich“ |
+|---|---|---|---|
+| 1 (10 °C außen) | 27–30 h | 0,07–0,11 K | 0,17–0,22 K |
+| 2 (4 °C außen) | 33–37 h | 0,10–0,14 K | 0,24–0,28 K |
+| 3 (0 °C, Nachtabsenkung) | 23 h | 0,39–0,45 K | 0,63–0,68 K |
+
+Die physikalische Zeitkonstante des simulierten Raums liegt bei etwa 21 h.
+
+Neue Attribute der Klima-Entität: `model_forecast` (Temperaturverlauf der nächsten 6 h für „Ventil wie jetzt“, „Ventil zu“, „Ventil voll auf“, nicht in der Datenbank), `model_demand` (Bedarf, den das Modell für das Soll erwartet), `model_confidence`, `comfort_in_band_24h` (Anteil der letzten 24 h innerhalb ±0,3 K), `comfort_rms_24h`, `comfort_mean_24h`.
+
 ### Steuermodi
 - **PID** (Standard) – stetig, vorausschauend, lernend
 - **PWM/Takt** – Ventil im Zeitraster ganz auf (auf die Stufe) oder zu; linear unabhängig von der Ventilkennlinie, dafür mehr Motorbewegungen
@@ -250,6 +280,16 @@ Beide über Zigbee2MQTT.
 - Der erste Durchlauf erfolgt 7 Tage nach Aktivierung
 
 ## 📄 Changelog
+
+### v2.5.0 (2026-10-18) – Lernendes Raummodell und Auswertungen 🧠
+
+Keine Migration, alle Entitäten und Lernwerte bleiben, die Regelung selbst ist unverändert (identische Simulationsergebnisse).
+
+- **Raummodell** pro Raum und Heizungstyp, online gelernt (rekursive kleinste Quadrate): Zeitkonstante, Heizleistung, Fremdwärme, Prognose für 6 h in drei Szenarien, erwarteter Bedarf. Beobachtungsmodus, steuert nicht.
+- **Regelgüte**: Anteil der letzten 24 h innerhalb ±0,3 K, RMS und mittlere Abweichung.
+- **6 neue Sensoren pro Thermostat** mit Langzeitstatistik (Lernkurven): Regelgüte 24h, Gelernte Wetterabhängigkeit, Raummodell Zeitkonstante / Heizleistung / Fremdwärme / Prognose 3h. Modellwerte erscheinen nach einem Tag Lernzeit.
+- Modell und Regelgüte werden mit den übrigen Lernwerten gespeichert; „Lernwerte zurücksetzen“ setzt auch das Modell zurück.
+- Neue Simulation `tests/sim_model.py`, 56 automatische Tests.
 
 ### v2.4.1 (2026-10-18) – Zigbee2MQTT 2.x: Temperaturquelle der TRVZB
 - Neuere Zigbee2MQTT-Versionen nennen die Option für den externen Sensor `remote_temperature` statt `external`. SonTRV wählt die Option jetzt aus der Optionsliste des Geräts. Seit dem 8.10. lief der Versuch, `external` zu setzen, alle 15 min ins Leere und erzeugte Warnungen im Log.

@@ -258,6 +258,9 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
     )
     _attr_hvac_modes = [HVACMode.HEAT, HVACMode.OFF]
     _attr_preset_modes = ["*", "1", "2", "3", "4", "5"]
+    # Forecast curves are for the dashboard only - keep them out of the
+    # recorder database (the climate state is written very often).
+    _unrecorded_attributes = frozenset({"model_forecast", "model_confidence"})
 
     def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
         """Initialise the entity."""
@@ -889,9 +892,21 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
                 _LOGGER.exception("%s: control cycle failed", self.name)
             finally:
                 if not self._removed:
+                    self._track_applied_demand()
                     self._schedule_next()
                     self._update_extra_attributes()
                     self.async_write_ha_state()
+
+    @callback
+    def _track_applied_demand(self) -> None:
+        """Tell the learned room model what the valve really did."""
+        ctrl = self._controller
+        if ctrl is None or self._is_exercising:
+            return
+        applied = 0.0
+        if self._attr_hvac_mode == HVACMode.HEAT and self._max_valve_position > 0:
+            applied = 100.0 * min(1.0, self._valve_position / self._max_valve_position)
+        ctrl.model.track_input(_now_ts(), applied)
 
     async def _async_control_locked(self, reason: str, force_write: bool) -> None:
         now = _now_ts()
@@ -970,6 +985,7 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
                 heating_enabled=True,
                 mode=CONTROL_MODE_BINARY,
                 hysteresis=(ASSIST_ON_BELOW - ASSIST_OFF_BELOW) / 2,
+                comfort_target=target,
             )
             result.reason = "assist"
             self._last_result = result
@@ -1682,6 +1698,11 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
             "window_open_delay": self._window_open_delay,
             "disturbance": bool(r and getattr(r, "disturbance", False)),
         }
+        if ctrl is not None:
+            try:
+                attrs.update(ctrl.insights(self._attr_target_temperature, self._demand))
+            except Exception:  # pragma: no cover - insights must never break the entity
+                _LOGGER.debug("%s: insights not available", self.name, exc_info=True)
         if self._attr_current_temperature is not None and self._attr_target_temperature is not None:
             attrs[ATTR_TEMPERATURE_DIFFERENCE] = round(
                 self._attr_target_temperature - self._attr_current_temperature, 1
