@@ -190,7 +190,7 @@ Der Gerätetyp wird automatisch an den Zigbee2MQTT-Entitäten erkannt (Attribut 
 
 | Gerät | Ventilstellung | Raumtemperatur | Kalibrierung |
 |---|---|---|---|
-| **SONOFF TRVZB** | `valve_opening_degree` + komplementärer `valve_closing_degree` | `external_temperature_input` (+ `temperature_sensor_select: external`) | `valve_calibration` |
+| **SONOFF TRVZB** | `valve_opening_degree` + komplementärer `valve_closing_degree` | `external_temperature_input` (+ `temperature_sensor_select`: `remote_temperature`, bei älterem Zigbee2MQTT `external`) | `valve_calibration` |
 | **Bosch Heizkörper-Thermostat II** (BTH-RA, RBSH-TRV0-ZB-EU) | `pi_heating_demand` (direkt, wird vom Gerät gehalten) | `remote_temperature`, alle 20 min (Gerät fällt sonst nach 30 min auf den eigenen Sensor zurück) | `valve_adapt_process` |
 
 Beide über Zigbee2MQTT.
@@ -250,6 +250,10 @@ Beide über Zigbee2MQTT.
 - Der erste Durchlauf erfolgt 7 Tage nach Aktivierung
 
 ## 📄 Changelog
+
+### v2.4.1 (2026-10-18) – Zigbee2MQTT 2.x: Temperaturquelle der TRVZB
+- Neuere Zigbee2MQTT-Versionen nennen die Option für den externen Sensor `remote_temperature` statt `external`. SonTRV wählt die Option jetzt aus der Optionsliste des Geräts. Seit dem 8.10. lief der Versuch, `external` zu setzen, alle 15 min ins Leere und erzeugte Warnungen im Log.
+- Lehnt das Gerät die Umstellung ab, wird es höchstens einmal pro Stunde erneut versucht.
 
 ### v2.4.0 (2026-10-18) – Regelung aus zehn Tagen Heizbetrieb nachgeschärft 📈
 

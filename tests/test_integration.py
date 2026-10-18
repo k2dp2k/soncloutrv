@@ -394,6 +394,43 @@ async def test_room_mates_end_window_freeze_together(hass: HomeAssistant, mqtt_m
     assert c1._last_result is None or c1._last_result.demand < 80
 
 
+async def test_new_z2m_sensor_select_options(hass: HomeAssistant, mqtt_mock) -> None:
+    """Zigbee2MQTT 2.x: remote_temperature instead of external, state unknown."""
+    trv = FakeTRV(hass)
+    trv.setup_states()
+    options = ["local_temperature", "remote_temperature", "remote_source_offline"]
+    hass.states.async_set(SELECT, "unknown", {"options": options})
+    entry, _ = await _setup(hass)
+    hass.states.async_set(SELECT, "unknown", {"options": options})
+    await _run_cycle(hass)
+    climate = runtime.climate_for_entry(hass, ENTRY_ID)
+    assert climate._external_sensor_option(hass.states.get(SELECT)) == "remote_temperature"
+    assert climate._external_sensor_option(None) is None
+    hass.states.async_set(SELECT, "unknown", {"options": ["internal", "external", "external_2"]})
+    assert climate._external_sensor_option(hass.states.get(SELECT)) == "external"
+    hass.states.async_set(SELECT, "unknown", {"options": ["local_temperature"]})
+    assert climate._external_sensor_option(hass.states.get(SELECT)) is None
+
+
+async def test_sensor_select_is_set_once_per_hour(hass: HomeAssistant, mqtt_mock, freezer) -> None:
+    options = ["local_temperature", "remote_temperature", "remote_source_offline"]
+    _, trv = await _setup(hass)
+    hass.states.async_set(SELECT, "unknown", {"options": options})
+    trv.calls.clear()
+    climate = runtime.climate_for_entry(hass, ENTRY_ID)
+    climate._last_select_try_ts = None
+    climate._last_ext_sync_ts = None
+    await _wait(hass, freezer, 16 * 60)
+    tries = [c for c in trv.calls if c[2].get("entity_id") == SELECT]
+    assert tries and tries[-1][2]["option"] == "remote_temperature"
+    # the device keeps rejecting it -> no new try within the hour
+    hass.states.async_set(SELECT, "unknown", {"options": options})
+    for _ in range(3):
+        hass.states.async_set(ROOM, str(20.0 + _ * 0.2), {"device_class": "temperature"})
+        await _wait(hass, freezer, 15 * 60)
+    assert len([c for c in trv.calls if c[2].get("entity_id") == SELECT]) == len(tries)
+
+
 async def test_trv_own_window_detection_is_switched_off(hass: HomeAssistant, mqtt_mock) -> None:
     hass.states.async_set(f"switch.{BASE}_open_window", "on")
     switched: list[str] = []
