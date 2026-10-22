@@ -236,7 +236,7 @@ Der Gerätetyp wird automatisch an den Zigbee2MQTT-Entitäten erkannt (Attribut 
 | Gerät | Ventilstellung | Raumtemperatur | Kalibrierung |
 |---|---|---|---|
 | **SONOFF TRVZB** | `valve_opening_degree` + komplementärer `valve_closing_degree` | `external_temperature_input` (+ `temperature_sensor_select`: `remote_temperature`, bei älterem Zigbee2MQTT `external`) | `valve_calibration` |
-| **Bosch Heizkörper-Thermostat II** (BTH-RA, RBSH-TRV0-ZB-EU) | `pi_heating_demand` (direkt, wird vom Gerät gehalten) | `remote_temperature`, alle 20 min (Gerät fällt sonst nach 30 min auf den eigenen Sensor zurück) | `valve_adapt_process` |
+| **Bosch Heizkörper-Thermostat II** (BTH-RA, RBSH-TRV0-ZB-EU) | `pi_heating_demand`, dazu folgt der Geräte-Sollwert der Stellung (zu → 5 °C, voll auf → 30 °C, sonst Raum-Soll), damit die eigene Regelung des Geräts nicht gegensteuert | `remote_temperature`, alle 20 min (Gerät fällt sonst nach 30 min auf den eigenen Sensor zurück) | `valve_adapt_process` |
 
 Beide über Zigbee2MQTT.
 
@@ -295,6 +295,14 @@ Beide über Zigbee2MQTT.
 - Der erste Durchlauf erfolgt 7 Tage nach Aktivierung
 
 ## 📄 Changelog
+
+### v2.6.2 (2026-10-22) – Bosch regelt nicht mehr gegen 🛁
+
+Gefunden in den Daten der ersten Tage mit den neuen Auswertungen. Keine Migration, alle Entitäten und Lernwerte bleiben.
+
+- **Bosch-Heizkörper-Thermostat regelte selbst mit**: Im Modus „manual“ regelt der Bosch weiter auf seinen eigenen Sollwert, den SonTRV bisher auf den Raum-Sollwert (22,5 °C) gesetzt hat. Sobald das Bad darunter fiel, fuhr er sein Ventil innerhalb von zehn Minuten auf bis zu 76 % auf, obwohl SonTRV 0 % vorgab; SonTRV setzte es alle 25 Minuten zurück. Folgen: Der Handtuchheizkörper heizte ungeregelt mit, auch bei offenem Fenster, und der Zähler „Ventilbewegungen“ stieg auf bis zu 142 pro Tag.
+- **Lösung**: Der Sollwert des Bosch folgt jetzt der Ventilvorgabe: zu → 5 °C (Frostschutz bleibt), voll auf → 30 °C, Zwischenstellungen → Raum-Sollwert. Damit sind beide Regler einig.
+- Hinweis: Fällt Home Assistant aus, bleibt der Handtuchheizkörper beim zuletzt gesetzten Sollwert, meist 5 °C, also aus. Die Fußbodenheizung im Bad läuft weiter.
 
 ### v2.6.0 (2026-10-18) – Prüfstand für das Raummodell 🔬
 
