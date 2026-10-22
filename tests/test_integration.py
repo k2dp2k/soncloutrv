@@ -560,12 +560,16 @@ async def test_radiator_next_to_floor_loop_assists_only(hass: HomeAssistant, mqt
     # 1 K below target: floor modulates, the radiator switches fully on
     assert 0 < trv.last("number", "set_value", OPEN)["value"] <= 40
     assert trv.last("number", "set_value", f"number.{base}_pi_heating_demand")["value"] == 100
+    # the Bosch's own regulation must agree: fully open -> maximum set-point
+    assert hass.states.get(f"climate.{base}").attributes["temperature"] == 30.0
     assert hass.states.get("climate.trv_handtuch").attributes["control_reason"] == "assist"
     # back within 0.1 K of the target: the radiator goes off, the floor keeps its demand
     hass.states.async_set(ROOM, "21.45", {"device_class": "temperature"})
     await hass.async_block_till_done()
     await _run_cycle(hass, 6)
     assert trv.last("number", "set_value", f"number.{base}_pi_heating_demand")["value"] == 0
+    # shut -> minimum set-point, otherwise the Bosch heats on its own after ~15 min
+    assert hass.states.get(f"climate.{base}").attributes["temperature"] == 5.0
     assert trv.last("number", "set_value", OPEN)["value"] > 0
     assert hass.states.get("climate.trv_handtuch").attributes["heater_role"] == "assist"
     # the assist heater never learns an integral of its own
@@ -602,6 +606,8 @@ async def test_heater_role_can_be_forced_primary(hass: HomeAssistant, mqtt_mock)
     assert t.effective_role == "primary"
     demand = trv.last("number", "set_value", f"number.{base}_pi_heating_demand")["value"]
     assert 0 < demand < 100  # PI, not two-point
+    # in between the Bosch regulates to the room target itself
+    assert hass.states.get(f"climate.{base}").attributes["temperature"] == 21.5
 
 
 async def test_unstable_trv_sensor_is_not_used_as_fallback(hass: HomeAssistant, mqtt_mock, freezer) -> None:
@@ -918,6 +924,7 @@ async def test_bosch_bth_ra_driver(hass: HomeAssistant, mqtt_mock, freezer) -> N
     await hass.async_block_till_done()
     assert trv.last("number", "set_value", f"number.{base}_pi_heating_demand")["value"] == 0
     assert hass.states.get(f"climate.{base}").state == "off"
+    assert hass.states.get(f"climate.{base}").attributes["temperature"] == 5.0
 
 
 KUCHE_ID = "01KXKZ7SKVSYSTS33R44NB22P1"

@@ -127,6 +127,8 @@ from .const import (
     DOMAIN,
     EXT_TEMP_REFRESH_INTERVAL,
     EXT_TEMP_REFRESH_INTERVAL_BOSCH,
+    BOSCH_SETPOINT_CLOSED,
+    BOSCH_SETPOINT_OPEN,
     TRV_DRIVER_BOSCH,
     TRV_DRIVER_SONOFF,
     HEATER_ROLE_ASSIST,
@@ -1400,8 +1402,12 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
         closing = 100 - opening
         if self.trv_driver == TRV_DRIVER_BOSCH:
             # Bosch BTH-RA: the valve position is written directly as PI
-            # heating demand; the device keeps it (tested on RBSH-TRV0-ZB-EU).
+            # heating demand. The device only holds it until its own
+            # regulation acts again (~15 min), so its set-point follows the
+            # commanded position (see _async_sync_target_temperature).
             ok = await self._async_set_number(self._pi_demand_entity, "pi_heating_demand", opening)
+            if ok:
+                await self._async_sync_target_temperature()
         # Close first when reducing, open first when increasing: the valve
         # never passes through a wider position than intended.
         elif last is not None and opening < last:
@@ -1539,11 +1545,23 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
         return None
 
     async def _async_sync_target_temperature(self) -> None:
-        """Keep the TRV set-point in line (TRV step is 0.5 K)."""
+        """Keep the TRV set-point in line (TRV step is 0.5 K).
+
+        The Bosch BTH-RA keeps regulating to its own set-point in manual mode
+        and overrides the written heating demand after ~15 min (seen in the
+        real flat: valve ramped to 76 % while 0 % was commanded). Its
+        set-point therefore follows the commanded position: shut -> minimum,
+        fully open -> maximum, so both agree; in between the room target.
+        """
         target = self._attr_target_temperature
         state = self.hass.states.get(self._valve_entity)
         if target is None or state is None or state.state in (STATE_UNAVAILABLE, STATE_UNKNOWN):
             return
+        if self.trv_driver == TRV_DRIVER_BOSCH:
+            if self._valve_position <= 0:
+                target = _to_float(state.attributes.get("min_temp")) or BOSCH_SETPOINT_CLOSED
+            elif self._valve_position >= 100:
+                target = _to_float(state.attributes.get("max_temp")) or BOSCH_SETPOINT_OPEN
         rounded = round(target * 2) / 2
         current = _to_float(state.attributes.get(ATTR_TEMPERATURE))
         if current is not None and abs(current - rounded) < 0.01:
