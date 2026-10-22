@@ -19,6 +19,7 @@ from homeassistant.util import dt as dt_util
 from custom_components.soncloutrv import runtime
 from custom_components.soncloutrv.const import CONFIG_VERSION, DOMAIN, STATS_EPOCH
 from custom_components.soncloutrv.controller import PROFILES
+from custom_components.soncloutrv.sensor import room_sensor_owner, room_sensor_unique_id
 
 BASE = "heizung_wohnzimmer_fussboden"
 TRV = f"climate.{BASE}"
@@ -506,7 +507,9 @@ async def test_silent_sensor_stays_trusted_when_plausible(hass: HomeAssistant, m
     assert state.attributes["sensor_stale"] is False
 
 
-async def _setup_bath(hass: HomeAssistant, trv: FakeTRV, *, role: str | None = None) -> tuple[MockConfigEntry, MockConfigEntry, str]:
+def _bath_entries(
+    hass: HomeAssistant, *, role: str | None = None, floor_role: str | None = None
+) -> tuple[MockConfigEntry, MockConfigEntry, str]:
     """Floor loop (SONOFF) + towel radiator (Bosch) sharing room 'Bad'."""
     base = "handtuch_heizung_bad"
     hass.states.async_set(
@@ -518,7 +521,10 @@ async def _setup_bath(hass: HomeAssistant, trv: FakeTRV, *, role: str | None = N
     floor = MockConfigEntry(
         domain=DOMAIN, title="trv_bad", version=CONFIG_VERSION, entry_id="01KXKYXHTQQ1XB0FA9SVA70TY7", unique_id=TRV,
         data={**V1_DATA, "name": "trv_bad", "room_id": "Bad"},
-        options={**V1_OPTIONS, "room_id": "Bad", "window_sensors": [], "kp": 25.0, "ki": 0.001736},
+        options={
+            **V1_OPTIONS, "room_id": "Bad", "window_sensors": [], "kp": 25.0, "ki": 0.001736,
+            **({"heater_role": floor_role} if floor_role else {}),
+        },
     )
     options = {**V1_OPTIONS, "room_id": "Bad", "heating_type": "radiator", "valve_opening_step": "5", "window_sensors": [],
                "kp": 25.0, "ki": 0.010417}
@@ -529,6 +535,11 @@ async def _setup_bath(hass: HomeAssistant, trv: FakeTRV, *, role: str | None = N
         unique_id=f"climate.{base}", data={**V1_DATA, "name": "trv_handtuch", "valve_entity": f"climate.{base}", "room_id": "Bad"},
         options=options,
     )
+    return floor, towel, base
+
+
+async def _setup_bath(hass: HomeAssistant, trv: FakeTRV, *, role: str | None = None) -> tuple[MockConfigEntry, MockConfigEntry, str]:
+    floor, towel, base = _bath_entries(hass, role=role)
     for entry in (floor, towel):
         entry.add_to_hass(hass)
         assert await hass.config_entries.async_setup(entry.entry_id)
@@ -914,3 +925,149 @@ async def test_bosch_bth_ra_driver(hass: HomeAssistant, mqtt_mock, freezer) -> N
     assert trv.last("number", "set_value", f"number.{base}_pi_heating_demand")["value"] == 0
     assert hass.states.get(f"climate.{base}").state == "off"
     assert hass.states.get(f"climate.{base}").attributes["temperature"] == 5.0
+
+
+KUCHE_ID = "01KXKZ7SKVSYSTS33R44NB22P1"
+
+
+def _wohnzimmer_entries(hass: HomeAssistant) -> tuple[MockConfigEntry, MockConfigEntry]:
+    """trv_wohn + trv_kuche sharing room 'Wohnzimmer' (kuche has the smaller entry id)."""
+    base2 = "heizung_kuche_fussboden"
+    hass.states.async_set(f"climate.{base2}", "off", {"hvac_modes": ["off", "auto", "heat"], "temperature": 7})
+    hass.states.async_set(f"number.{base2}_valve_opening_degree", "0")
+    hass.states.async_set(f"number.{base2}_valve_closing_degree", "100")
+    wohn = MockConfigEntry(
+        domain=DOMAIN, title="trv_wohn", version=CONFIG_VERSION, entry_id=ENTRY_ID, unique_id=TRV,
+        data=V1_DATA, options=V1_OPTIONS,
+    )
+    kuche = MockConfigEntry(
+        domain=DOMAIN, title="trv_kuche", version=CONFIG_VERSION, entry_id=KUCHE_ID, unique_id=f"climate.{base2}",
+        data={**V1_DATA, "name": "trv_kuche", "valve_entity": f"climate.{base2}"}, options=V1_OPTIONS,
+    )
+    return wohn, kuche
+
+
+async def _setup_room(
+    hass: HomeAssistant,
+    entries: tuple[MockConfigEntry, ...],
+    *,
+    reverse: bool,
+    registered: tuple[tuple[MockConfigEntry, str, str, str], ...] = (),
+) -> None:
+    """Add all entries first (as after a restart), then set them up in the given order.
+
+    ``registered``: (entry, kind, room_key, object_id) room sensors already in the registry.
+    """
+    from homeassistant.setup import async_setup_component
+
+    assert await async_setup_component(hass, DOMAIN, {})
+    for entry in entries:
+        entry.add_to_hass(hass)
+    registry = er.async_get(hass)
+    for entry, kind, room_key, object_id in registered:
+        registry.async_get_or_create(
+            "sensor", DOMAIN, room_sensor_unique_id(entry.entry_id, kind, room_key),
+            suggested_object_id=object_id, config_entry=entry,
+        )
+    for entry in reversed(entries) if reverse else entries:
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+
+
+def _room_sensors(hass: HomeAssistant) -> dict[str, str]:
+    """unique_id -> entity_id of all registered room sensors."""
+    return {
+        reg.unique_id: reg.entity_id
+        for reg in er.async_get(hass).entities.values()
+        if reg.platform == DOMAIN and reg.domain == "sensor" and ("_room_pid_" in reg.unique_id or "_room_temp_" in reg.unique_id)
+    }
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+async def test_room_sensor_owner_is_independent_of_setup_order(hass: HomeAssistant, mqtt_mock, reverse: bool) -> None:
+    """Bath without registry entries: the primary floor loop owns the room sensors."""
+    trv = FakeTRV(hass)
+    trv.setup_states(room=20.5)
+    floor, towel, _ = _bath_entries(hass)
+    await _setup_room(hass, (floor, towel), reverse=reverse)
+    assert room_sensor_owner(hass, "Bad", "pid") == floor.entry_id
+    assert room_sensor_owner(hass, "Bad", "temp") == floor.entry_id
+    assert set(_room_sensors(hass)) == {
+        room_sensor_unique_id(floor.entry_id, "pid", "Bad"),
+        room_sensor_unique_id(floor.entry_id, "temp", "Bad"),
+    }
+    assert hass.states.get("sensor.trv_bad_raum_heizbedarf") is not None
+    assert hass.states.get("sensor.trv_bad_raumtemperatur").state == "20.5"
+    assert hass.states.get("sensor.trv_handtuch_raumtemperatur") is None
+    # a reload of the non-owner does not take the sensors over
+    assert await hass.config_entries.async_reload(towel.entry_id)
+    await hass.async_block_till_done()
+    assert len(_room_sensors(hass)) == 2
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+async def test_primary_heater_owns_before_smaller_entry_id(hass: HomeAssistant, mqtt_mock, reverse: bool) -> None:
+    trv = FakeTRV(hass)
+    trv.setup_states(room=20.5)
+    floor, towel, _ = _bath_entries(hass, role="primary", floor_role="assist")
+    await _setup_room(hass, (floor, towel), reverse=reverse)
+    assert room_sensor_owner(hass, "Bad", "pid") == towel.entry_id
+    assert hass.states.get("sensor.trv_handtuch_raum_heizbedarf") is not None
+    assert hass.states.get("sensor.trv_bad_raum_heizbedarf") is None
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+async def test_existing_room_sensor_keeps_its_owner(hass: HomeAssistant, mqtt_mock, reverse: bool) -> None:
+    """trv_wohn already has the room sensors, kuche (smaller id) does not get them."""
+    trv = FakeTRV(hass)
+    trv.setup_states()
+    wohn, kuche = _wohnzimmer_entries(hass)
+    await _setup_room(
+        hass, (wohn, kuche), reverse=reverse,
+        registered=(
+            (wohn, "temp", "Wohnzimmer", "trv_wohn_raumtemperatur"),
+            (wohn, "pid", "Wohnzimmer", "trv_wohn_raum_heizbedarf"),
+        ),
+    )
+    assert room_sensor_owner(hass, "Wohnzimmer", "temp") == wohn.entry_id
+    assert set(_room_sensors(hass).values()) == {"sensor.trv_wohn_raumtemperatur", "sensor.trv_wohn_raum_heizbedarf"}
+    assert hass.states.get("sensor.trv_wohn_raumtemperatur").state == "20.5"
+    assert hass.states.get("sensor.trv_kuche_raumtemperatur") is None
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+async def test_orphaned_room_sensors_of_non_owner_are_removed(hass: HomeAssistant, mqtt_mock, reverse: bool) -> None:
+    """Both bath circuits had room sensors (flapping owner): one set survives, nothing else is removed."""
+    trv = FakeTRV(hass)
+    trv.setup_states(room=20.5)
+    floor, towel, _ = _bath_entries(hass)
+    registry = er.async_get(hass)
+    await _setup_room(
+        hass, (floor, towel), reverse=reverse,
+        registered=(
+            (floor, "temp", "Bad", "badezimmer_trv_bad_raumtemperatur_2"),
+            (floor, "pid", "Bad", "badezimmer_trv_bad_raum_heizbedarf_2"),
+            (towel, "temp", "Bad", "trv_handtuch_raumtemperatur"),
+            (towel, "pid", "Bad", "trv_handtuch_raum_heizbedarf"),
+            # stale room key of an earlier configuration
+            (towel, "temp", "sensor.alter_sensor", "trv_handtuch_raumtemperatur_alt"),
+        ),
+    )
+    assert set(_room_sensors(hass).values()) == {
+        "sensor.badezimmer_trv_bad_raumtemperatur_2",
+        "sensor.badezimmer_trv_bad_raum_heizbedarf_2",
+    }
+    assert hass.states.get("sensor.badezimmer_trv_bad_raumtemperatur_2").state == "20.5"
+    assert hass.states.get("sensor.trv_handtuch_raumtemperatur") is None
+    # thermostats and all other sensors of the non-owner are untouched
+    assert registry.async_get_entity_id("climate", DOMAIN, f"{DOMAIN}_{towel.entry_id}") == "climate.trv_handtuch"
+    assert registry.async_get_entity_id("climate", DOMAIN, f"{DOMAIN}_{floor.entry_id}") == "climate.trv_bad"
+    assert hass.states.get("sensor.trv_handtuch_ventilposition") is not None
+    # a second start keeps exactly this set
+    for entry in (floor, towel):
+        assert await hass.config_entries.async_reload(entry.entry_id)
+    await hass.async_block_till_done()
+    assert set(_room_sensors(hass).values()) == {
+        "sensor.badezimmer_trv_bad_raumtemperatur_2",
+        "sensor.badezimmer_trv_bad_raum_heizbedarf_2",
+    }

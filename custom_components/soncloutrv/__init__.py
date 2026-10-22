@@ -71,15 +71,6 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         await runtime.async_save_now(hass)
         domain = hass.data.get(DOMAIN, {})
         domain.pop(entry.entry_id, None)
-        # Room level debug sensors are created once per room; allow them to be
-        # re-created when the entry is set up again.
-        conf = {**entry.data, **entry.options}
-        room_key = conf.get("room_id") or conf.get("temp_sensor")
-        for registry_key in ("room_pid_sensors", "room_temp_sensors"):
-            owners = domain.get(f"{registry_key}_owner", {})
-            if owners.get(room_key) == entry.entry_id:
-                owners.pop(room_key, None)
-                domain.get(registry_key, set()).discard(room_key)
     return unload_ok
 
 

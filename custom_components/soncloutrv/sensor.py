@@ -17,7 +17,7 @@ from homeassistant.const import (
     UnitOfTime,
     UnitOfEnergy,
 )
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.event import async_track_state_change_event, async_track_time_interval
 from homeassistant.helpers.device_registry import DeviceInfo
@@ -27,7 +27,20 @@ from homeassistant.util import dt as dt_util
 from homeassistant.util import slugify
 from homeassistant.const import CONF_NAME
 
-from .const import DOMAIN, CONF_VALVE_ENTITY, CONF_TEMP_SENSOR, CONF_ROOM_ID, STATS_EPOCH, VERSION
+from .const import (
+    CONF_HEATER_ROLE,
+    CONF_HEATING_TYPE,
+    CONF_ROOM_ID,
+    CONF_TEMP_SENSOR,
+    CONF_VALVE_ENTITY,
+    DOMAIN,
+    HEATER_ROLE_ASSIST,
+    HEATER_ROLE_AUTO,
+    HEATING_TYPE_FLOOR,
+    HEATING_TYPE_RADIATOR,
+    STATS_EPOCH,
+    VERSION,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -182,31 +195,27 @@ async def async_setup_entry(
     # Determine room key in the same way as the climate entity does so that the
     # sensor can read the shared RoomPIDState from hass.data[DOMAIN]["room_states"].
     # Prefer updated room_id from options if available.
-    room_id = config_entry.options.get(CONF_ROOM_ID, config_entry.data.get(CONF_ROOM_ID))
-    temp_sensor = config_entry.options.get(CONF_TEMP_SENSOR, config_entry.data.get(CONF_TEMP_SENSOR))
-    room_key = room_id or temp_sensor
+    temp_sensor = _conf_value(config_entry, CONF_TEMP_SENSOR)
+    room_key = _room_key(config_entry)
 
-    # Create at most one room sensor per room across all config entries.
-    domain_data = hass.data.setdefault(DOMAIN, {})
-    room_sensor_registry: set[str] = domain_data.setdefault("room_pid_sensors", set())
-    room_temp_registry: set[str] = domain_data.setdefault("room_temp_sensors", set())
-
-    pid_owner: dict[str, str] = domain_data.setdefault("room_pid_sensors_owner", {})
-    temp_owner: dict[str, str] = domain_data.setdefault("room_temp_sensors_owner", {})
-    if room_key and pid_owner.get(room_key) in (None, config_entry.entry_id) and climate_entity_id:
+    # Create at most one room sensor per room across all config entries. The
+    # owner is derived from all entries and the registry, never from the setup
+    # order, so it is the same entry after every restart.
+    own_room_ids: set[str] = set()
+    if room_key and climate_entity_id and room_sensor_owner(hass, room_key, "pid") == config_entry.entry_id:
         sensors.append(SonClouTRVRoomPIDSensor(hass, config_entry, climate_entity_id, room_key))
-        room_sensor_registry.add(room_key)
-        pid_owner[room_key] = config_entry.entry_id
+        own_room_ids.add(room_sensor_unique_id(config_entry.entry_id, "pid", room_key))
         _LOGGER.info("Added room-level PID debug sensor for room '%s'", room_key)
 
     # Optional: Raum-Temperatursensor, der die konfigurierte externe
     # Temperaturquelle für diesen Raum spiegelt, so dass verbundene Räume einen
     # gemeinsamen Temperaturwert haben.
-    if room_key and temp_owner.get(room_key) in (None, config_entry.entry_id) and temp_sensor:
+    if room_key and temp_sensor and room_sensor_owner(hass, room_key, "temp") == config_entry.entry_id:
         sensors.append(SonClouTRVRoomTemperatureSensor(hass, config_entry, temp_sensor, room_key))
-        room_temp_registry.add(room_key)
-        temp_owner[room_key] = config_entry.entry_id
+        own_room_ids.add(room_sensor_unique_id(config_entry.entry_id, "temp", room_key))
         _LOGGER.info("Added room-level temperature sensor for room '%s'", room_key)
+
+    _remove_orphaned_room_sensors(entity_reg, config_entry.entry_id, own_room_ids)
 
     # Always add native SonTRV valve position sensor (reads from climate entity)
     # Pass the found climate_entity_id to avoid looking it up again
@@ -271,6 +280,91 @@ async def async_setup_entry(
         sensors.append(SonClouTRVInsightSensor(hass, config_entry, climate_entity_id, spec))
 
     async_add_entities(sensors, True)
+
+
+ROOM_SENSOR_KINDS = ("pid", "temp")
+
+
+def _conf_value(entry: ConfigEntry, key: str):
+    """Option value, falling back to the initial config data."""
+    return entry.options.get(key, entry.data.get(key))
+
+
+def _room_key(entry: ConfigEntry) -> str | None:
+    """Room of a config entry (room_id, else the external temperature sensor)."""
+    return _conf_value(entry, CONF_ROOM_ID) or _conf_value(entry, CONF_TEMP_SENSOR)
+
+
+def room_sensor_unique_id(entry_id: str, kind: str, room_key: str) -> str:
+    """Unique id of a room level sensor ("pid" = Raum Heizbedarf, "temp" = Raumtemperatur)."""
+    return f"{DOMAIN}_{entry_id}_room_{kind}_{room_key}"
+
+
+def _is_assist(entry: ConfigEntry, mates: list[ConfigEntry]) -> bool:
+    """Heater role as the climate entity resolves it, from the config alone."""
+    role = _conf_value(entry, CONF_HEATER_ROLE) or HEATER_ROLE_AUTO
+    if role != HEATER_ROLE_AUTO:
+        return role == HEATER_ROLE_ASSIST
+    if (_conf_value(entry, CONF_HEATING_TYPE) or HEATING_TYPE_FLOOR) != HEATING_TYPE_RADIATOR:
+        return False
+    return any(
+        (_conf_value(other, CONF_HEATING_TYPE) or HEATING_TYPE_FLOOR) == HEATING_TYPE_FLOOR
+        for other in mates
+        if other is not entry
+    )
+
+
+def room_sensor_owner(hass: HomeAssistant, room_key: str, kind: str) -> str | None:
+    """Entry id that provides the room sensor ``kind`` for ``room_key``.
+
+    Deterministic over restarts and independent of the setup order:
+    1. an entry whose sensor is already in the entity registry (keeps the
+       entity id and its history; an enabled one before a disabled one),
+    2. the primary heater before an assist heater,
+    3. the smallest entry id.
+    """
+    mates = [
+        entry
+        for entry in hass.config_entries.async_entries(DOMAIN)
+        if entry.disabled_by is None and _room_key(entry) == room_key
+    ]
+    candidates = [e for e in mates if kind != "temp" or _conf_value(e, CONF_TEMP_SENSOR)]
+    if not candidates:
+        return None
+    registry = er.async_get(hass)
+
+    def rank(entry: ConfigEntry) -> tuple[int, int, int, str]:
+        entity_id = registry.async_get_entity_id(
+            "sensor", DOMAIN, room_sensor_unique_id(entry.entry_id, kind, room_key)
+        )
+        reg_entry = registry.async_get(entity_id) if entity_id else None
+        return (
+            reg_entry is None,
+            reg_entry is not None and reg_entry.disabled_by is not None,
+            _is_assist(entry, mates),
+            entry.entry_id,
+        )
+
+    return min(candidates, key=rank).entry_id
+
+
+@callback
+def _remove_orphaned_room_sensors(registry: er.EntityRegistry, entry_id: str, keep: set[str]) -> None:
+    """Drop this entry's room sensors that another entry of the room owns.
+
+    Only room sensors (Raum Heizbedarf / Raumtemperatur) are touched; they
+    would otherwise stay registered as unavailable after an owner change.
+    """
+    prefixes = tuple(f"{DOMAIN}_{entry_id}_room_{kind}_" for kind in ROOM_SENSOR_KINDS)
+    for reg_entry in er.async_entries_for_config_entry(registry, entry_id):
+        if (
+            reg_entry.domain == "sensor"
+            and reg_entry.platform == DOMAIN
+            and reg_entry.unique_id.startswith(prefixes)
+            and reg_entry.unique_id not in keep
+        ):
+            _LOGGER.info("Removing orphaned room sensor %s", reg_entry.entity_id)
+            registry.async_remove(reg_entry.entity_id)
 
 
 class SonClouTRVProxySensor(SensorEntity):
@@ -701,7 +795,7 @@ class SonClouTRVRoomTemperatureSensor(SensorEntity):
         self._remove_listener = None
 
         self._attr_name = f"{config_entry.data[CONF_NAME]} Raumtemperatur"
-        self._attr_unique_id = f"{DOMAIN}_{config_entry.entry_id}_room_temp_{room_key}"
+        self._attr_unique_id = room_sensor_unique_id(config_entry.entry_id, "temp", room_key)
         self._attr_icon = "mdi:home-thermometer"
         self._attr_native_value = None
 
@@ -776,7 +870,7 @@ class SonClouTRVRoomPIDSensor(SensorEntity):
 
         room_name = room_key
         self._attr_name = f"{config_entry.data[CONF_NAME]} Raum Heizbedarf"
-        self._attr_unique_id = f"{DOMAIN}_{config_entry.entry_id}_room_pid_{room_key}"
+        self._attr_unique_id = room_sensor_unique_id(config_entry.entry_id, "pid", room_key)
         self._attr_icon = "mdi:home-thermometer"
         self._attr_native_value = None
 

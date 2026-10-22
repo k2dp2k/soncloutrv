@@ -303,6 +303,16 @@ Gefunden in den Daten der ersten Tage mit den neuen Auswertungen. Keine Migratio
 - **Bosch-Heizkörper-Thermostat regelte selbst mit**: Im Modus „manual“ regelt der Bosch weiter auf seinen eigenen Sollwert, den SonTRV bisher auf den Raum-Sollwert (22,5 °C) gesetzt hat. Sobald das Bad darunter fiel, fuhr er sein Ventil innerhalb von zehn Minuten auf bis zu 76 % auf, obwohl SonTRV 0 % vorgab; SonTRV setzte es alle 25 Minuten zurück. Folgen: Der Handtuchheizkörper heizte ungeregelt mit, auch bei offenem Fenster, und der Zähler „Ventilbewegungen“ stieg auf bis zu 142 pro Tag.
 - **Lösung**: Der Sollwert des Bosch folgt jetzt der Ventilvorgabe: zu → 5 °C (Frostschutz bleibt), voll auf → 30 °C, Zwischenstellungen → Raum-Sollwert. Damit sind beide Regler einig.
 - Hinweis: Fällt Home Assistant aus, bleibt der Handtuchheizkörper beim zuletzt gesetzten Sollwert, meist 5 °C, also aus. Die Fußbodenheizung im Bad läuft weiter.
+- 67 automatische Tests.
+
+### v2.6.1 (2026-10-18) – Raumsensoren mit festem Besitzer 🏷️
+
+Keine Migration, Thermostate, Lernwerte und alle übrigen Entitäten bleiben unverändert.
+
+- **Raum Heizbedarf** und **Raumtemperatur** gibt es pro Raum nur einmal. Welches Thermostat sie bereitstellt, hing bisher davon ab, welches beim Start zuerst eingerichtet wurde. Das wechselte zwischen Neustarts: Einträge blieben als „nicht verfügbar“ zurück (z. B. `sensor.badezimmer_trv_bad_raumtemperatur_2`), die Historie war auf mehrere Entitäten verteilt.
+- Der Besitzer wird jetzt aus allen SonTRV-Einträgen und der Entitätsregistrierung bestimmt, nicht mehr aus der Startreihenfolge: zuerst das Thermostat, dessen Raumsensor bereits registriert ist (Entitäts-ID und Historie bleiben), dann der Hauptheizkreis vor einem Zusatzheizkörper (`assist`), dann die kleinste Eintrags-ID.
+- Verwaiste Raumsensoren der anderen Thermostate im Raum (und solche eines früheren Raums) werden aus der Registrierung entfernt. Betroffen sind nur diese beiden Raumsensoren, nie Klima- oder andere Entitäten.
+- 67 automatische Tests.
 
 ### v2.6.0 (2026-10-18) – Prüfstand für das Raummodell 🔬
 

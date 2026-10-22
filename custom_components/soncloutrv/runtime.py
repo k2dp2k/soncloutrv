@@ -28,8 +28,6 @@ def domain_data(hass: HomeAssistant) -> dict[str, Any]:
     data = hass.data.setdefault(DOMAIN, {})
     data.setdefault("rooms", {})  # room_key -> list[climate]
     data.setdefault("controllers", {})  # controller key -> RoomController
-    data.setdefault("room_pid_sensors", set())
-    data.setdefault("room_temp_sensors", set())
     return data
 
 
