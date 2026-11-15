@@ -422,9 +422,12 @@ class RoomController:
             self.ff_coeff = None if coeff is None else clamp(float(coeff), 0.0, 10.0)
         except (TypeError, ValueError):
             self.ff_coeff = None
-        self.model.restore(data.get("model"))
+        model_restored = self.model.restore(data.get("model"))
         self.comfort.restore(data.get("comfort"))
-        self.skill.restore(data.get("skill"))
+        if model_restored:
+            # The skill statistics describe the stored model; with a model
+            # that is relearnt (new MODEL_VERSION) they start again as well.
+            self.skill.restore(data.get("skill"))
 
     def reset_learning(self) -> None:
         """Forget the integral, the learned feed-forward and the room model."""

@@ -225,6 +225,7 @@ Neue Attribute der Klima-Entität: `model_pred_error`, `trend_pred_error`, `mode
 - Offen: Ventil zu, Lernen pausiert. Alle Kreise eines Raums (z. B. Wohnzimmer + Küche) werden gemeinsam eingefroren und freigegeben.
 - Zu (Fußboden): Das Ventil bleibt auf der Stellung von vor dem Lüften, bis sich die Luft vom warmen Estrich selbst erholt hat (bis 0,3 K an die Temperatur vor dem Lüften, höchstens 60 min, früher wenn die Erholung stockt). Erst danach regelt und lernt der Regler wieder. Attribut `post_window_soft_active`.
 - Zu (Heizkörper): sofort normale Regelung, der Handtuchheizkörper hilft beim Aufwärmen.
+- **Fenster im Nachbarraum**: Zieht die kalte Luft eines anderen Raums herüber (offene Schlafzimmertür, Fenster über Nacht gekippt), trage dessen Fenstersensor zusätzlich beim betroffenen Raum ein. Sonst heizt der Fußboden gegen den Luftzug und der Raum überschwingt Stunden später, sobald das Fenster zu ist. Der andere Raum ist davon nicht betroffen.
 
 ### Raum-CSV-Logging
 Optional (Optionen). Enthält Temperatur, Quelle, Vorhersage, Steigung, P/I/D/FF, gelernte Vorsteuerung, Ventil, Fenster. Eine Datei im alten v1-Format wird als `.v1.bak` beiseitegelegt.
@@ -295,6 +296,17 @@ Beide über Zigbee2MQTT.
 - Der erste Durchlauf erfolgt 7 Tage nach Aktivierung
 
 ## 📄 Changelog
+
+### v2.7.0 (2026-11-15) – Raummodell repariert, vier Wochen Heizdaten ausgewertet 🔧
+
+Auswertung 18.10.–15.11. (alle 7 Kreise, außen von +15 °C bis −4 °C). Keine Migration, Regelung und Lernwerte (I-Anteil, Wettervorsteuerung) bleiben; nur das Raummodell lernt einmal neu.
+
+- **Raummodell lief in Räumen ohne Heizbedarf weg**: Schlafzimmer, Büro, Flur und Handtuchheizkörper meldeten eine Fremdwärme von −1,0 bis −1,9 K/h, eine 3-h-Prognose von 17,4 °C in einem Raum, der konstant 23,5 °C hatte, und einen Vorhersage-Vorteil von −260 bis −1141 %. Ursache: Bei geschlossenem Ventil sind Wärmeverlust `a` und Fremdwärme `c` fast nicht zu trennen. RLS schob `a` unter die Grenze, die Begrenzung setzte nur `a` zurück, und `c` lief mit bis an −2 K/h. Jetzt werden die anderen Parameter beim Erreichen einer Grenze auf ihre beste Schätzung bei diesem Grenzwert gesetzt (bedingte Projektion, auch für die Kovarianz). Liegt der Modellfehler dauerhaft über 0,5 K/h, wird die Unsicherheit zurückgesetzt, damit das Modell neu lernt.
+- Modellversion 2: Die Raummodelle aus v2.5/v2.6 werden verworfen. Prognosen gibt es nach etwa einem Tag wieder. Der Regler selbst nutzt das Modell nicht, deshalb ändert sich am Heizen nichts.
+- **Befund Flur** (Konfiguration, kein Code): Das Schlafzimmerfenster ist im Mittel 6,5 h am Tag offen, meist über Nacht. Die kalte Luft zieht in den Flur, der Flurregler fuhr bis auf 50–89 % Bedarf hoch, und wenn das Fenster zuging, überschwang der Flur auf 24,1 °C und blieb 12 h über dem Soll (13.11.). Ohne diese Ereignisse braucht der Flur praktisch keine Wärme. Abhilfe: das Schlafzimmerfenster zusätzlich als Fenstersensor des Flurs eintragen (siehe [Fenster](#fenster)).
+- Weitere Befunde ohne Änderung: Wohnzimmer/Küche und Bad halten den Sollwert im Tagesmittel (±0,3 K). Schlafzimmer (+1,1 K) und Büro (+0,7 K) werden vollständig von den Nachbarräumen mitgeheizt, ihre Ventile waren vier Wochen lang zu. Der Handtuchheizkörper bewegt sich seit v2.6.2 nicht mehr unnötig. In den beheizten Räumen sagt das Modell nicht besser voraus als der Trend (Vorteil −15 % bzw. 0 %); die Entscheidung aus v2.6.0, nicht mit dem Modell zu regeln, bleibt.
+- Nachgeschärft im Review: Das Neulernen löst höchstens einmal am Tag aus (ein einzelner Ausreißer durch Duschen oder Kochen reicht nicht), und mit dem alten Modell wird auch dessen Vorhersage-Statistik verworfen.
+- 72 automatische Tests.
 
 ### v2.6.2 (2026-10-22) – Bosch regelt nicht mehr gegen 🛁
 
