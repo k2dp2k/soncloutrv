@@ -86,6 +86,7 @@ class ThermalModel:
         self._u_ts: float | None = None
         self._update_ts: float | None = None
         self.updates = 0
+        self._relearn_at = 0  # update count of the last covariance reset
         self.rmse: float | None = None  # K/h, one step slope residual
 
     # --- persistence -----------------------------------------------------
@@ -99,25 +100,27 @@ class ThermalModel:
             "rmse": None if self.rmse is None else round(self.rmse, 4),
         }
 
-    def restore(self, data: dict[str, Any] | None) -> None:
+    def restore(self, data: dict[str, Any] | None) -> bool:
+        """Restore a stored model. False if it was missing, old or invalid."""
         if not isinstance(data, dict) or data.get("v") != MODEL_VERSION:
-            return
+            return False
         try:
             theta = [float(x) for x in data["theta"]]
             p = [[float(x) for x in row] for row in data["p"]]
             if len(theta) != 3 or len(p) != 3 or any(len(r) != 3 for r in p):
-                return
+                return False
             if not all(math.isfinite(x) for x in theta) or not all(math.isfinite(x) for r in p for x in r):
-                return
-            self.theta = theta
-            self.p = p
-            self.u_f = _clamp(float(data.get("u_f", 0.0)), 0.0, 1.0)
-            self.updates = max(0, int(data.get("updates", 0)))
+                return False
+            updates = max(0, int(data.get("updates", 0)))
             rmse = data.get("rmse")
-            self.rmse = None if rmse is None else max(0.0, float(rmse))
+            rmse = None if rmse is None else max(0.0, float(rmse))
+            u_f = _clamp(float(data.get("u_f", 0.0)), 0.0, 1.0)
         except (KeyError, TypeError, ValueError):
-            return
+            return False
+        self.theta, self.p, self.u_f, self.updates, self.rmse = theta, p, u_f, updates, rmse
+        self._relearn_at = updates
         self._project()
+        return True
 
     def reset(self) -> None:
         self.__init__(self.floor_lag_h)
@@ -161,11 +164,16 @@ class ThermalModel:
         sq = error * error
         self.rmse = math.sqrt(sq) if self.rmse is None else math.sqrt(0.98 * self.rmse**2 + 0.02 * sq)
         self._project()
-        if self.rmse > DIVERGED_RMSE and self.updates >= MIN_UPDATES_FOR_FORECAST:
+        if (
+            self.rmse > DIVERGED_RMSE
+            and self.updates - self._relearn_at >= MIN_UPDATES_FOR_FORECAST
+        ):
             # Persistently wrong (room changed, sensor moved): forget the
-            # certainty, keep the estimate as the starting point.
+            # certainty, keep the estimate as the starting point. At most
+            # once a day, so a single outlier (shower, cooking) cannot keep
+            # the covariance open.
             self.p = [[P0[i] if i == j else 0.0 for j in range(3)] for i in range(3)]
-            self.rmse = None
+            self._relearn_at = self.updates
         return True
 
     def _project(self) -> None:

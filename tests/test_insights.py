@@ -87,8 +87,33 @@ def test_diverged_model_recovers():
         }
     )
     assert model.predict(23.5, 0.1, 0.0, 3.0) < 18.0  # the broken state
-    outside = _steady_warm_room(model, days=2)
+    outside = _steady_warm_room(model, days=3)
     assert abs(model.predict(23.5, outside, 0.0, 3.0) - 23.5) < 0.3
+
+
+def test_single_outlier_does_not_reopen_the_covariance():
+    """A shower or cooking peak must not make a settled model relearn."""
+    model = ThermalModel(floor_lag_h=2.0)
+    _drive(model, a=0.05, b=2.0, c=0.15, days=10, heat=True)
+    before = [model.p[i][i] for i in range(3)]
+    theta = list(model.theta)
+    model.update(1e7, 21.0, 1.9, 5.0)  # one wild slope
+    assert all(model.p[i][i] <= before[i] * 1.01 for i in range(3))
+    assert all(abs(model.theta[i] - theta[i]) < 0.2 for i in range(3))
+
+
+def test_old_model_also_restarts_the_skill_statistics():
+    ctrl = RoomController(key="Schlafzimmer")
+    ctrl.restore(
+        {
+            "integral": 3.0,
+            "ff_coeff": 0.5,
+            "model": {"v": 1, "theta": [0.005, 1.0, -1.9], "p": [[1, 0, 0], [0, 1, 0], [0, 0, 1]], "updates": 2000},
+            "skill": {"m": 0.96, "t": 0.006, "n": 1906},
+        }
+    )
+    assert ctrl.integral == 3.0 and ctrl.ff_coeff == 0.5  # learned demand is kept
+    assert ctrl.model.updates == 0 and ctrl.skill.samples == 0
 
 
 def test_models_of_older_versions_are_relearnt():

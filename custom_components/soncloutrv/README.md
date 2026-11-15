@@ -305,7 +305,8 @@ Auswertung 18.10.–15.11. (alle 7 Kreise, außen von +15 °C bis −4 °C). Kei
 - Modellversion 2: Die Raummodelle aus v2.5/v2.6 werden verworfen. Prognosen gibt es nach etwa einem Tag wieder. Der Regler selbst nutzt das Modell nicht, deshalb ändert sich am Heizen nichts.
 - **Befund Flur** (Konfiguration, kein Code): Das Schlafzimmerfenster ist im Mittel 6,5 h am Tag offen, meist über Nacht. Die kalte Luft zieht in den Flur, der Flurregler fuhr bis auf 50–89 % Bedarf hoch, und wenn das Fenster zuging, überschwang der Flur auf 24,1 °C und blieb 12 h über dem Soll (13.11.). Ohne diese Ereignisse braucht der Flur praktisch keine Wärme. Abhilfe: das Schlafzimmerfenster zusätzlich als Fenstersensor des Flurs eintragen (siehe [Fenster](#fenster)).
 - Weitere Befunde ohne Änderung: Wohnzimmer/Küche und Bad halten den Sollwert im Tagesmittel (±0,3 K). Schlafzimmer (+1,1 K) und Büro (+0,7 K) werden vollständig von den Nachbarräumen mitgeheizt, ihre Ventile waren vier Wochen lang zu. Der Handtuchheizkörper bewegt sich seit v2.6.2 nicht mehr unnötig. In den beheizten Räumen sagt das Modell nicht besser voraus als der Trend (Vorteil −15 % bzw. 0 %); die Entscheidung aus v2.6.0, nicht mit dem Modell zu regeln, bleibt.
-- 70 automatische Tests.
+- Nachgeschärft im Review: Das Neulernen löst höchstens einmal am Tag aus (ein einzelner Ausreißer durch Duschen oder Kochen reicht nicht), und mit dem alten Modell wird auch dessen Vorhersage-Statistik verworfen.
+- 72 automatische Tests.
 
 ### v2.6.2 (2026-10-22) – Bosch regelt nicht mehr gegen 🛁
 
