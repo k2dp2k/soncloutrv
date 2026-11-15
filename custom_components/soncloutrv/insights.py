@@ -41,7 +41,9 @@ from __future__ import annotations
 import math
 from typing import Any
 
-MODEL_VERSION = 1
+# 2 (v2.7.0): constrained projection; models of v2.5/v2.6 may have diverged
+# (see ThermalModel._project) and are relearnt.
+MODEL_VERSION = 2
 
 # Parameter bounds (physically plausible for a flat).
 A_MIN, A_MAX = 0.005, 0.5  # 1/h  -> time constant 2 ... 200 h
@@ -59,6 +61,9 @@ MAX_SLOPE = 2.0  # K/h
 MIN_UPDATE_SPACING = 600.0  # s
 # Forecasts are only published after this many model updates (~1 day).
 MIN_UPDATES_FOR_FORECAST = 96
+# One step slope residual (K/h, filtered) above which the model no longer
+# describes the room: the covariance is reset so RLS adapts quickly again.
+DIVERGED_RMSE = 0.5
 # Forecast settings.
 FORECAST_HOURS = 6
 FORECAST_STEP_H = 0.25
@@ -156,10 +161,47 @@ class ThermalModel:
         sq = error * error
         self.rmse = math.sqrt(sq) if self.rmse is None else math.sqrt(0.98 * self.rmse**2 + 0.02 * sq)
         self._project()
+        if self.rmse > DIVERGED_RMSE and self.updates >= MIN_UPDATES_FOR_FORECAST:
+            # Persistently wrong (room changed, sensor moved): forget the
+            # certainty, keep the estimate as the starting point.
+            self.p = [[P0[i] if i == j else 0.0 for j in range(3)] for i in range(3)]
+            self.rmse = None
         return True
 
     def _project(self) -> None:
-        """Keep parameters plausible and the covariance bounded."""
+        """Keep parameters plausible and the covariance bounded.
+
+        A parameter that leaves its bound is set to the bound and the other
+        parameters are moved to their best estimate *given* that value
+        (conditional mean, ``theta_j += P_ji / P_ii * delta``). Clamping one
+        parameter alone breaks the fit when two are correlated: with the
+        valve always shut ``a`` (loss) and ``c`` (foreign heat) are almost
+        collinear, RLS kept pushing ``a`` below its bound and ``c`` along
+        with it, the clamp only reset ``a``, and ``c`` drifted to -1.9 K/h
+        (real bedroom, v2.6: "3 h forecast 17.4 C" in a room steady at 23.5 C).
+        The covariance is conditioned on the bound as well, with a small
+        variance left so the parameter can leave the bound again.
+        """
+        bounds = ((A_MIN, A_MAX), (B_MIN, B_MAX), (C_MIN, C_MAX))
+        for _ in range(3):
+            violated = [
+                i for i in range(3) if not bounds[i][0] <= self.theta[i] <= bounds[i][1]
+            ]
+            if not violated:
+                break
+            i = violated[0]
+            pii = self.p[i][i]
+            delta = _clamp(self.theta[i], *bounds[i]) - self.theta[i]
+            if math.isfinite(pii) and pii > 1e-12:
+                col = [self.p[j][i] for j in range(3)]
+                for j in range(3):
+                    if j != i:
+                        self.theta[j] += col[j] / pii * delta
+                self.p = [
+                    [self.p[r][s] - col[r] * col[s] / pii for s in range(3)] for r in range(3)
+                ]
+                self.p[i][i] = 0.01 * P0[i]
+            self.theta[i] = _clamp(self.theta[i], *bounds[i])
         a, b, c = self.theta
         self.theta = [_clamp(a, A_MIN, A_MAX), _clamp(b, B_MIN, B_MAX), _clamp(c, C_MIN, C_MAX)]
         # Without excitation (valve always shut) forgetting would blow up the

@@ -5,7 +5,7 @@ import math
 import random
 
 from custom_components.soncloutrv.controller import RoomController
-from custom_components.soncloutrv.insights import ComfortTracker, ThermalModel
+from custom_components.soncloutrv.insights import MODEL_VERSION, ComfortTracker, ThermalModel
 
 
 def _drive(model: ThermalModel, *, a: float, b: float, c: float, days: int, heat: bool, seed: int = 1):
@@ -47,6 +47,56 @@ def test_shut_valve_keeps_heating_rate_uncertain():
     assert all(math.isfinite(x) and abs(x) < 10 for row in model.p for x in row)
 
 
+def _steady_warm_room(model: ThermalModel, *, days: float, temp: float = 23.5, seed: int = 3) -> float:
+    """Bedroom of v2.6: valve always shut, held 1 K above target by the
+    neighbours, outside 10 -> -5 C. Returns the last outside temperature."""
+    random.seed(seed)
+    outside = 0.0
+    for step in range(int(days * 96)):
+        t = step * 900.0
+        day = t / 86400
+        outside = 5.0 + 5.0 * math.sin(2 * math.pi * (day - 0.375)) - 0.5 * day
+        model.track_input(t, 0.0)
+        model.update(t, temp + random.gauss(0, 0.05), random.gauss(0, 0.05), outside)
+    return outside
+
+
+def test_steady_room_with_shut_valve_does_not_drift():
+    """Loss a and foreign heat c are collinear behind a shut valve. Clamping
+    a alone let c drift to -1.9 K/h (real bedroom: 3 h forecast 17.4 C)."""
+    model = ThermalModel(floor_lag_h=2.0)
+    outside = _steady_warm_room(model, days=10)
+    assert abs(model.predict(23.5, outside, 0.0, 3.0) - 23.5) < 0.3
+    assert model.rmse is not None and model.rmse < 0.15
+    a, _, c = model.theta
+    # steady state: a (Tout - T) + c ~ 0
+    assert abs(a * (outside - 23.5) + c) < 0.1
+
+
+def test_diverged_model_recovers():
+    """The real bedroom model of v2.6.2 relearns within two days."""
+    model = ThermalModel(floor_lag_h=2.0)
+    model.restore(
+        {
+            "v": MODEL_VERSION,
+            "theta": [0.005, 1.0, -1.932694],
+            "p": [[0.00009427, 0, 0.00169661], [0, 4, 0], [0.00169661, 0, 0.03167369]],
+            "u_f": 0,
+            "updates": 2091,
+            "rmse": 1.6067,
+        }
+    )
+    assert model.predict(23.5, 0.1, 0.0, 3.0) < 18.0  # the broken state
+    outside = _steady_warm_room(model, days=2)
+    assert abs(model.predict(23.5, outside, 0.0, 3.0) - 23.5) < 0.3
+
+
+def test_models_of_older_versions_are_relearnt():
+    model = ThermalModel(floor_lag_h=2.0)
+    model.restore({"v": 1, "theta": [0.005, 1.0, -1.9], "p": [[1, 0, 0], [0, 1, 0], [0, 0, 1]], "updates": 2000})
+    assert model.updates == 0 and model.theta[2] == 0.0
+
+
 def test_forecast_scenarios_are_ordered():
     model = ThermalModel(floor_lag_h=2.0)
     _drive(model, a=0.05, b=2.0, c=0.1, days=5, heat=True)
@@ -65,7 +115,7 @@ def test_model_persistence_roundtrip_and_garbage():
     other = ThermalModel()
     other.restore(data)
     assert other.theta == data["theta"] and other.updates == model.updates
-    other.restore({"v": 1, "theta": ["x"], "p": []})
+    other.restore({"v": MODEL_VERSION, "theta": ["x"], "p": []})
     assert other.updates == model.updates  # garbage is ignored
     other.restore({"v": 99})  # unknown version is ignored
 
