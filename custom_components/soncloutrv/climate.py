@@ -32,6 +32,7 @@ from homeassistant.components.climate import (
     HVACAction,
     HVACMode,
 )
+from homeassistant.components import persistent_notification
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import (
     ATTR_TEMPERATURE,
@@ -183,6 +184,19 @@ EXERCISE_HOLD = 300
 # within this tolerance: sensors that only report on change stay silent in a
 # stable room, which is not a failure.
 STALE_SENSOR_TOLERANCE = 1.0  # K
+# ... but not forever: the TRV sensor can be an echo of the value SonTRV
+# writes to it (TRVZB external_temperature_input, Bosch remote_temperature),
+# so a dead room sensor (empty battery, v2.7.0 bathroom: 3 days at 22.7 C)
+# looks "plausible" indefinitely. After this many sensor timeouts without a
+# single report the sensor counts as failed: the controller holds the learned
+# demand, an assist heater stays off, and a notification is raised.
+SENSOR_DEAD_FACTOR = 3
+SENSOR_DEAD_MIN = 12 * 3600  # never earlier than this (short timeouts)
+# An assist heater (towel radiator) only bridges short dips. Continuously on
+# for longer than this means the controller works on a wrong temperature:
+# switch off and lock out for ASSIST_LOCKOUT.
+ASSIST_MAX_ON = 3 * 3600
+ASSIST_LOCKOUT = 3600
 # The TRV's own sensor is only usable as a fallback / plausibility reference
 # while its offset to the room sensor is stable. A head that sits on the
 # return pipe (Bosch on a towel radiator) or inside the ClouSet box next to
@@ -375,6 +389,10 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
         self._removed = False
         self._temp_source = "sensor"
         self._sensor_stale = False
+        self._sensor_failed = False
+        self._sensor_notified = False
+        self._assist_on_since: float | None = None
+        self._assist_lockout_until: float | None = None
         self._local_offset: float | None = None
         self._local_offset_dev: float | None = None  # mean |offset - mean offset|
         self._valve_resend_count = 0
@@ -855,6 +873,38 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
             return None
         return local + (self._local_offset or 0.0)
 
+    @property
+    def _sensor_dead_after_s(self) -> float:
+        return max(SENSOR_DEAD_MIN, SENSOR_DEAD_FACTOR * self._sensor_timeout_s)
+
+    @callback
+    def _notify_sensor_failure(self) -> None:
+        """Raise / dismiss a notification for a dead room sensor (once)."""
+        notification_id = f"{DOMAIN}_sensor_failed_{self._entry_id}"
+        if self._sensor_failed and not self._sensor_notified:
+            self._sensor_notified = True
+            _LOGGER.warning(
+                "%s: room sensor %s has not reported for more than %d h - "
+                "holding the learned demand until it reports again",
+                self.name,
+                self._temp_sensor,
+                self._sensor_dead_after_s // 3600,
+            )
+            persistent_notification.async_create(
+                self.hass,
+                (
+                    f"Der Raumsensor `{self._temp_sensor}` von **{self.name}** meldet seit mehr als "
+                    f"{self._sensor_dead_after_s // 3600:.0f} Stunden nichts "
+                    "(Batterie leer oder Funkverbindung verloren). SonTRV hält solange den gelernten "
+                    "Grundbedarf, ein Zusatzheizkörper bleibt aus."
+                ),
+                title="SonTRV: Raumsensor ausgefallen",
+                notification_id=notification_id,
+            )
+        elif not self._sensor_failed and self._sensor_notified:
+            self._sensor_notified = False
+            persistent_notification.async_dismiss(self.hass, notification_id)
+
     def _current_room_temperature(self, now: float) -> tuple[float | None, str]:
         """Return the room temperature to control on and its source.
 
@@ -864,14 +914,22 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
         state = self.hass.states.get(self._temp_sensor)
         value = _state_float(state)
         self._sensor_stale = False
+        self._sensor_failed = False
         fallback = self._trv_sensor_temperature(now)
         if value is not None and state is not None:
-            if now - _reported_ts(state) <= self._sensor_timeout_s:
+            age = now - _reported_ts(state)
+            if age <= self._sensor_timeout_s:
                 return value, "sensor"
             # No report for a long time. Many sensors only report on change
             # (0.1 K steps), so a silent sensor in a stable room is normal.
             # Only distrust it when the TRV sensor says the room moved.
             self._sensor_stale = True
+            if age > self._sensor_dead_after_s:
+                # Dead (battery, lost from the network) while Home Assistant
+                # still shows the last value. The TRV sensor may only echo
+                # that value back, so do not use it either.
+                self._sensor_failed = True
+                return None, "none"
             if fallback is None or abs(fallback - value) <= STALE_SENSOR_TOLERANCE:
                 return value, "sensor"
         if fallback is not None:
@@ -918,6 +976,7 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
         # ----- OFF -----
         if self._attr_hvac_mode == HVACMode.OFF:
             self._demand = 0.0
+            self._assist_on_since = None
             self._cancel_pwm()
             if self._controller is not None and self._room_all_off():
                 self._controller.frozen = False
@@ -932,11 +991,26 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
         # ----- temperature -----
         temp, source = self._current_room_temperature(now)
         self._temp_source = source
+        self._notify_sensor_failure()
         if source == "trv_sensor" and temp is not None and self._controller is not None:
             self._controller.add_temperature(now, temp)
             self._attr_current_temperature = round(temp, 2)
         elif source == "sensor" and temp is not None:
             self._attr_current_temperature = temp
+            ctrl = self._controller
+            if (
+                self._sensor_stale
+                and ctrl is not None
+                and (ctrl.trend.last is None or abs(ctrl.trend.last - temp) > 1e-6)
+            ):
+                # The trend only gets room sensor values from state events.
+                # After a phase on the TRV sensor its last value is the TRV
+                # value; a silent room sensor sends no new event, so the
+                # controller kept acting on that value for days (v2.7.0
+                # bathroom: towel radiator 2.5 days at 100 %). Only for a
+                # silent sensor: a fresh one delivers its value with the
+                # state event, and an extra sample here could come before it.
+                ctrl.add_temperature(max(now, ctrl.trend.last_ts or now), temp)
 
         # ----- window -----
         if not self._window_freeze_active and self._any_window_open():
@@ -948,6 +1022,7 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
                 await self._async_end_window_freeze()
             else:
                 self._demand = 0.0
+                self._assist_on_since = None
                 await self._async_write_valve(0, force=force_write)
                 self._active = False
                 self._log_row(now)
@@ -990,6 +1065,26 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
                 comfort_target=target,
             )
             result.reason = "assist"
+            if result.demand > 0:
+                if self._assist_lockout_until is not None and now < self._assist_lockout_until:
+                    result.demand = 0.0
+                    result.reason = "assist_lockout"
+                elif self._assist_on_since is None:
+                    self._assist_on_since = now
+                elif now - self._assist_on_since > ASSIST_MAX_ON:
+                    _LOGGER.warning(
+                        "%s: assist heater was on for more than %d h without reaching the "
+                        "target - switched off for %d min. Check the room temperature sensor.",
+                        self.name,
+                        ASSIST_MAX_ON // 3600,
+                        ASSIST_LOCKOUT // 60,
+                    )
+                    self._assist_on_since = None
+                    self._assist_lockout_until = now + ASSIST_LOCKOUT
+                    result.demand = 0.0
+                    result.reason = "assist_lockout"
+            else:
+                self._assist_on_since = None
             self._last_result = result
             self._demand = result.demand
         elif source == "none":
@@ -997,6 +1092,7 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
             # learned steady-state demand (integral + weather feed-forward).
             ff = ctrl.feed_forward(target)
             self._demand = 0.0 if assist else max(0.0, min(60.0, ctrl.integral + ff))
+            self._assist_on_since = None
             self._temp_source = "hold"
             ctrl.last_time = now
         elif (
@@ -1700,6 +1796,7 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
             "no_heat_supply": bool(ctrl and ctrl.no_heat_supply),
             "temperature_source": self._temp_source,
             "sensor_stale": self._sensor_stale,
+            "sensor_failed": self._sensor_failed,
             "sensor_fallback_offset": None if self._local_offset is None else round(self._local_offset, 2),
             "sensor_fallback_deviation": None if self._local_offset_dev is None else round(self._local_offset_dev, 2),
             "trv_sensor_trusted": self._trv_sensor_trusted,
@@ -1897,6 +1994,9 @@ class SonClouTRVClimate(ClimateEntity, RestoreEntity):
             "valve_write_errors": self._valve_write_errors,
             "temperature_source": self._temp_source,
             "sensor_stale": self._sensor_stale,
+            "sensor_failed": self._sensor_failed,
+            "assist_on_since": self._assist_on_since,
+            "assist_lockout_until": self._assist_lockout_until,
             "local_temp_entity": self._local_temp_entity,
             "local_offset": self._local_offset,
             "local_offset_deviation": self._local_offset_dev,
