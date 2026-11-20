@@ -12,6 +12,7 @@ from pytest_homeassistant_custom_component.common import (
 )
 
 from homeassistant.core import HomeAssistant, ServiceCall, State
+from homeassistant.components import persistent_notification
 from homeassistant.components.climate import HVACMode
 from homeassistant.helpers import entity_registry as er
 from homeassistant.util import dt as dt_util
@@ -595,6 +596,95 @@ async def test_bath_window_unfreezes_both_controllers(hass: HomeAssistant, mqtt_
     await _set_window(hass, freezer, "off", "binary_sensor.fenster_bad")
     assert f._controller.frozen is False
     assert t._controller.frozen is False
+
+
+async def test_assist_follows_silent_sensor_after_trv_fallback(hass: HomeAssistant, mqtt_mock, freezer) -> None:
+    """Real bathroom, 18 Nov: room sensor battery empty (value frozen), window
+    opened, the Bosch sensor took over and switched the towel radiator on.
+    When the Bosch sensor came back within 1 K of the frozen value the source
+    went back to "sensor", but that value never reached the trend: the
+    radiator ran 2.5 days at 100 % and heated the floor through its return."""
+    trv = FakeTRV(hass)
+    trv.setup_states(room=21.6)
+    floor, towel, base = await _setup_bath(hass, trv)
+    local = f"sensor.{base}_local_temperature"
+    demand = f"number.{base}_pi_heating_demand"
+    await _run_cycle(hass)
+    t = runtime.climate_for_entry(hass, towel.entry_id)
+    assert t._local_offset == pytest.approx(1.0)
+    assert trv.last("number", "set_value", demand)["value"] == 0
+    # room sensor silent for 5 h, the Bosch sees the room cool down by 2 K
+    freezer.tick(timedelta(hours=5))
+    hass.states.async_set(local, "19.5", {"device_class": "temperature"}, force_update=True)
+    await _wait(hass, freezer, 6 * 60)
+    assert hass.states.get("climate.trv_handtuch").attributes["temperature_source"] == "trv_sensor"
+    assert trv.last("number", "set_value", demand)["value"] == 100
+    # the Bosch sensor recovers to within 1 K of the frozen room value
+    hass.states.async_set(local, "20.7", {"device_class": "temperature"}, force_update=True)
+    for _ in range(3):
+        await _wait(hass, freezer, 5 * 60)
+    state = hass.states.get("climate.trv_handtuch")
+    assert state.attributes["temperature_source"] == "sensor"
+    assert t._controller.trend.last == pytest.approx(21.6)
+    assert trv.last("number", "set_value", demand)["value"] == 0
+
+
+async def test_dead_room_sensor_holds_and_notifies(hass: HomeAssistant, mqtt_mock, freezer) -> None:
+    """A sensor that has not reported for 3 timeouts is dead, even if the TRV
+    (which may only echo the value written to it) agrees."""
+    trv = FakeTRV(hass)
+    trv.setup_states(room=20.0)
+    floor, towel, base = await _setup_bath(hass, trv)
+    local = f"sensor.{base}_local_temperature"
+    await _run_cycle(hass)
+    f = runtime.climate_for_entry(hass, floor.entry_id)
+    f._controller.integral = 4.0
+    # 13 h without a report; the TRV sensors keep agreeing (echo)
+    for _ in range(13):
+        freezer.tick(timedelta(hours=1))
+        hass.states.async_set(local, "19.0", {"device_class": "temperature"}, force_update=True)
+        hass.states.async_set(LOCAL, "21.5", {"device_class": "temperature"}, force_update=True)
+        async_fire_time_changed(hass)
+        await hass.async_block_till_done()
+    await _wait(hass, freezer, 16 * 60)
+    state = hass.states.get("climate.trv_bad")
+    assert state.attributes["sensor_failed"] is True
+    assert state.attributes["temperature_source"] == "hold"
+    assert hass.states.get("climate.trv_handtuch").attributes["temperature_source"] == "hold"
+    # the towel radiator stays off, the floor holds the learned demand
+    assert trv.last("number", "set_value", f"number.{base}_pi_heating_demand")["value"] == 0
+    assert 0 < trv.last("number", "set_value", OPEN)["value"] <= 40
+    notifications = persistent_notification._async_get_or_create_notifications(hass)
+    assert f"{DOMAIN}_sensor_failed_{floor.entry_id}" in notifications
+    assert f"{DOMAIN}_sensor_failed_{towel.entry_id}" in notifications
+    # a new report brings the sensor back
+    hass.states.async_set(ROOM, "20.1", {"device_class": "temperature"}, force_update=True)
+    await _wait(hass, freezer, 16 * 60)
+    state = hass.states.get("climate.trv_bad")
+    assert state.attributes["sensor_failed"] is False
+    assert state.attributes["temperature_source"] == "sensor"
+    assert f"{DOMAIN}_sensor_failed_{floor.entry_id}" not in notifications
+
+
+async def test_assist_heater_is_limited_to_three_hours(hass: HomeAssistant, mqtt_mock, freezer) -> None:
+    trv = FakeTRV(hass)
+    trv.setup_states(room=20.0)
+    floor, towel, base = await _setup_bath(hass, trv)
+    demand = f"number.{base}_pi_heating_demand"
+    await _run_cycle(hass)
+    assert trv.last("number", "set_value", demand)["value"] == 100
+    # the room stays 1.5 K below target although the radiator is on
+    for _ in range(40):  # 3 h 20 min
+        hass.states.async_set(ROOM, "20.0", {"device_class": "temperature"}, force_update=True)
+        await _wait(hass, freezer, 5 * 60)
+    state = hass.states.get("climate.trv_handtuch")
+    assert state.attributes["control_reason"] == "assist_lockout"
+    assert trv.last("number", "set_value", demand)["value"] == 0
+    # after the lockout the radiator may help again
+    for _ in range(13):
+        hass.states.async_set(ROOM, "20.0", {"device_class": "temperature"}, force_update=True)
+        await _wait(hass, freezer, 5 * 60)
+    assert trv.last("number", "set_value", demand)["value"] == 100
 
 
 async def test_heater_role_can_be_forced_primary(hass: HomeAssistant, mqtt_mock) -> None:

@@ -271,7 +271,7 @@ Beide über Zigbee2MQTT.
 - **TRV-Sensor als Notfall-Quelle**: nur, wenn sein Offset zum Raumsensor stabil ist (Attribut `trv_sensor_trusted`). Ein Bosch am Rücklauf oder ein TRVZB in der ClouSet-Box misst Rohrtemperatur, sobald Wasser fließt; das erkennt die Integration selbst und hält dann lieber den gelernten Bedarf.
 - **Ventil-Öffnungsbeginn bestimmen**: In der Raum-CSV stehen `trv_local_temp` und `valve_opening_percent`. Steigt die TRV-Temperatur erst ab z. B. 12 % Öffnung deutlich an, ist das der Öffnungsbeginn → `number.[name]_ventil_offnungsbeginn`.
 - **Fenster**: Sensoren werden beim Start und in jedem Regelzyklus geprüft. Ein Fenster, das beim HA-Neustart bereits offen war, oder ein verpasstes Zigbee-Ereignis führt nicht zu Heizen bei offenem Fenster.
-- **Raumsensor stumm**: Viele Sensoren melden nur bei Änderung (0,1 K). Bleibt der Sensor länger als „Sensor-Ausfall nach“ still, wird er weiter verwendet, solange der TRV-eigene Sensor (offsetkorrigiert) innerhalb von 1 K zustimmt (Attribut `sensor_stale`). Erst bei Abweichung oder `unavailable` übernimmt der TRV-Sensor, ohne Sensor der gelernte Grundbedarf.
+- **Raumsensor stumm**: Viele Sensoren melden nur bei Änderung (0,1 K). Bleibt der Sensor länger als „Sensor-Ausfall nach“ still, wird er weiter verwendet, solange der TRV-eigene Sensor (offsetkorrigiert) innerhalb von 1 K zustimmt (Attribut `sensor_stale`). Erst bei Abweichung oder `unavailable` übernimmt der TRV-Sensor, ohne Sensor der gelernte Grundbedarf. Nach dem Dreifachen dieser Zeit (mindestens 12 h) ohne jede Meldung gilt der Sensor als ausgefallen: gelernter Grundbedarf, Zusatzheizkörper aus, Benachrichtigung (Attribut `sensor_failed`, ab v2.7.1).
 - **Außensensor**: Nicht in die Sonne hängen, sonst bricht die Wettervorsteuerung an sonnigen Nachmittagen ein (der Wert wird 2 h tiefpassgefiltert, das fängt kurze Spitzen ab, keine Stunden).
 - **Keine Nachtabsenkung bei Estrich**: Das Modell zeigt nach einer Absenkung 22–6 Uhr morgens bis zu 2 K Untertemperatur; konstante Sollwerte sind bei Flächenheizung sparsamer und komfortabler.
 - **Lernwerte**: I-Anteil und Wettervorsteuerung werden über Neustarts gespeichert (alle 30 min und beim Beenden). Nach Umbauten `button.[name]_lernwerte_zurucksetzen`.
@@ -296,6 +296,16 @@ Beide über Zigbee2MQTT.
 - Der erste Durchlauf erfolgt 7 Tage nach Aktivierung
 
 ## 📄 Changelog
+
+### v2.7.1 (2026-11-20) – Handtuchheizkörper lief bei leerem Sensor tagelang 🔥
+
+Fehlerbehebung. Keine Migration, alle Entitäten und Lernwerte bleiben.
+
+- **Was passiert ist (Bad, 17.–20.11.)**: Die Batterie des Raumsensors war leer. Er meldete ab dem 17.11. 14:59 keine Temperatur mehr, Home Assistant zeigte aber weiter 22,7 °C. Beim Lüften am 18.11. fiel der Fühler des Bosch-Thermostats auf 20,8 °C, SonTRV regelte korrekt auf diesen Fühler um und schaltete danach den Handtuchheizkörper ein. Als der Bosch-Fühler wieder in die Nähe des eingefrorenen Werts kam, wechselte SonTRV zurück auf den Raumsensor. Dessen Wert kam aber nie im Regler an, weil der Regler Raumsensor-Werte nur bei neuen Meldungen übernimmt. Der Regler hielt das Bad deshalb weiter für 0,8 K zu kalt, der Handtuchheizkörper lief zweieinhalb Tage auf 100 % und heizte über den Rücklauf den Fußboden mit.
+- **Behoben**: Bei einem stummen Raumsensor bekommt der Regler den angezeigten Wert in jedem Zyklus, er regelt also immer auf die Temperatur, die er auch anzeigt.
+- **Toter Sensor**: Meldet der Raumsensor länger als das Dreifache von „Sensor-Ausfall nach“ (mindestens 12 h) gar nichts, gilt er als ausgefallen, auch wenn das TRV zustimmt. Das TRV zeigt oft nur den Wert, den SonTRV ihm selbst schickt. Der Fußboden hält dann den gelernten Grundbedarf, ein Zusatzheizkörper bleibt aus, und Home Assistant zeigt eine Benachrichtigung „SonTRV: Raumsensor ausgefallen“. Neues Attribut `sensor_failed`.
+- **Sicherung für den Zusatzheizkörper**: Länger als 3 h am Stück an ist für einen Handtuchheizkörper in der Rolle „Zusatzheizung“ kein normaler Betrieb. Er geht dann für 1 h aus (`control_reason: assist_lockout`, Warnung im Log).
+- 75 automatische Tests, darunter der Ablauf im Bad nachgestellt.
 
 ### v2.7.0 (2026-11-15) – Raummodell repariert, vier Wochen Heizdaten ausgewertet 🔧
 
