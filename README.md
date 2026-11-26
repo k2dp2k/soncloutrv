@@ -227,6 +227,8 @@ Neue Attribute der Klima-Entität: `model_pred_error`, `trend_pred_error`, `mode
 - Zu (Heizkörper): sofort normale Regelung, der Handtuchheizkörper hilft beim Aufwärmen.
 - **Fenster im Nachbarraum**: Zieht die kalte Luft eines anderen Raums herüber (offene Schlafzimmertür, Fenster über Nacht gekippt), trage dessen Fenstersensor zusätzlich beim betroffenen Raum ein. Sonst heizt der Fußboden gegen den Luftzug und der Raum überschwingt Stunden später, sobald das Fenster zu ist. Der andere Raum ist davon nicht betroffen.
 
+- **Langes Lüften ohne Fenstersensor** (ab v2.7.2): Fällt die Luft innerhalb von Minuten deutlich ab, ohne dass ein Sensor des Raums ein offenes Fenster meldet, hält der Fußboden den Bedarf von vorher, bis zu 3 h lang. Das fängt Fenster ohne Kontakt und Fenster in Nachbarräumen ab. Ein eingetragener Sensor bleibt die sauberere Lösung, weil das Ventil dann schließt.
+
 ### Raum-CSV-Logging
 Optional (Optionen). Enthält Temperatur, Quelle, Vorhersage, Steigung, P/I/D/FF, gelernte Vorsteuerung, Ventil, Fenster. Eine Datei im alten v1-Format wird als `.v1.bak` beiseitegelegt.
 
@@ -296,6 +298,29 @@ Beide über Zigbee2MQTT.
 - Der erste Durchlauf erfolgt 7 Tage nach Aktivierung
 
 ## 📄 Changelog
+
+### v2.7.2 (2026-11-26) – Fußboden heizt nicht mehr gegen langes Lüften 🪟
+
+Auswertung 15.–26.11. (außen um 0 °C), Details in `docs/analyse-2026-11-26.md`. Keine Migration, alle Entitäten und Lernwerte bleiben.
+
+- **Was passiert ist (24.–26.11.)**: Beim Lüften über ein Fenster, das der Raum nicht kennt (Schlafzimmerfenster 2 h offen bei offenen Innentüren, Fenster ohne Kontakt), fiel die Luft in Wohnzimmer und Bad innerhalb von zehn Minuten um 1,5–2 K und blieb dort. Die Zugluft-Unterdrückung folgte dem Einbruch mit 0,8 K/h, hat ihn also nur in der ersten Stunde verdeckt. Danach heizte der Fußboden gegen das offene Fenster: im Wohnzimmer bis 66 % Bedarf statt der üblichen 9 %. Nach dem Schließen erholte sich die Luft in einer Stunde von selbst, und die Wärme im Estrich schob das Wohnzimmer 0,9 K und das Bad 1,6 K über den Sollwert, für den Rest des Tages.
+- **Behoben**: Fällt die Luft innerhalb von 30 min um mehr als 0,6 K unter die Regeltemperatur, gilt das als Zugluft. Solange sie anhält, sinkt die Regeltemperatur nur noch mit 0,2 K/h (so viel verlieren Wände und Möbel in der Zeit wirklich), der Bedarf bleibt nahe am Wert vor dem Lüften. Hält der Einbruch länger als 3 h an, ist er ein echtes Defizit und wird wieder mit 0,8 K/h verfolgt. Ein Raum, der wirklich auskühlt (Heizungsausfall, Absenkung), fällt langsamer und wird wie bisher behandelt.
+- **Geprüft mit den Messwerten vom 26.11.**: Der alte Regler liefert in der Nachrechnung den aufgezeichneten Bedarf (bis 64 %). Der neue bleibt im Wohnzimmer bei höchstens 18 % (Mittel 8 statt 27 %), im Bad bei höchstens 13 % (Mittel 3 statt 12 %).
+- **Simulation** (`python3 tests/sim_airing.py`, Wohnung zwischen beheizten Nachbarn, außen 0 °C, 7 Tage):
+
+| Szenario | Messgröße | v2.7.1 | v2.7.2 |
+|---|---|---|---|
+| täglich 2 h Lüften | Regelabweichung RMS | 0,85 K | 0,13 K |
+| täglich 2 h Lüften | höchste Übertemperatur | 2,05 K | 0,27 K |
+| täglich 2 h Lüften | Stunden über Soll +0,3 K pro Tag | 9,2 | 0,0 |
+| täglich 2 h Lüften | tiefste Untertemperatur nach dem Lüften | −0,33 K | −0,64 K |
+| 2× täglich 30 min Lüften | Regelabweichung RMS | 0,18 K | 0,14 K |
+| Kälteeinbruch 14 K in einem Tag | Regelabweichung RMS | 0,10 K | 0,10 K |
+| Heizung 12 h aus | Regelabweichung RMS | 0,81 K | 0,81 K |
+
+- Der Preis: Nach sehr langem Lüften holt der Raum die letzten Zehntel etwas langsamer auf (etwa eine halbe Stunde pro Tag unter Soll −0,3 K statt keiner). Die übrigen Szenarien (`sim_clouset.py`, `sim_disturbances.py`, `sim_bath.py`) sind unverändert.
+- Der Handtuchheizkörper (Zusatzheizung) ist nicht geändert. Er schaltet bei Zugluft weiter ein, sobald das Bad 0,5 K unter Soll liegt.
+- 78 automatische Tests.
 
 ### v2.7.1 (2026-11-20) – Handtuchheizkörper lief bei leerem Sensor tagelang 🔥
 

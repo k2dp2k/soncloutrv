@@ -92,6 +92,18 @@ class HeatingProfile:
     # the controlled temperature is rate limited to this value and the
     # integral does not learn while such a disturbance is visible.
     max_air_rate: float | None = None  # None = no limit (radiators)
+    # Air that falls faster than max_air_rate is a draft. A short one is over
+    # before the rate limited temperature has moved much. A long one (a
+    # window in another room open for two hours with the inner doors open)
+    # used to be followed with max_air_rate, so after an hour the loop heated
+    # against the open window (26.11.2026: living room 66 % demand, then
+    # 0.9 K above the target for the rest of the day). While a draft lasts
+    # the controlled temperature therefore falls only with draft_cool_rate,
+    # roughly what walls and furniture really lose in that time. After
+    # draft_max_s the deficit is taken for real (heating failure, room left
+    # open for half a day) and followed with max_air_rate again.
+    draft_cool_rate: float = 0.2  # K/h
+    draft_max_s: float = 3 * 3600
     # Time constant (h) of the heat store between valve and room air, used
     # by the learned room model (insights.ThermalModel).
     floor_lag_h: float = 0.25
@@ -142,6 +154,10 @@ INTEGRAL_MIN = -25.0
 INTEGRAL_MAX = 100.0
 # |measured - rate limited temperature| above which a disturbance is assumed.
 DISTURBANCE_BAND = 0.3  # K
+# A draft: the air is DRAFT_GAP below the rate limited temperature within
+# DRAFT_ONSET_S after it started to fall faster than the limit.
+DRAFT_GAP = 0.6  # K
+DRAFT_ONSET_S = 30 * 60
 
 
 # Gains that earlier versions wrote into the options as defaults. When the
@@ -333,6 +349,10 @@ class RoomController:
     # rate limited temperature the controller acts on (see max_air_rate)
     _t_ctrl: float | None = None
     _t_ctrl_ts: float | None = None
+    # since when the air falls faster than max_air_rate, and since when that
+    # counts as a draft (see HeatingProfile.draft_cool_rate)
+    _gap_since: float | None = None
+    _draft_since: float | None = None
     # Window handling (room level, not persisted): temperature before the
     # first circuit of the room froze, and the start of the recovery phase
     # after the window closed.
@@ -350,12 +370,17 @@ class RoomController:
         self.trend.clear()
         self._t_ctrl = None
         self._t_ctrl_ts = None
+        self._gap_since = None
+        self._draft_since = None
 
     def _rate_limited(self, now: float, temp: float) -> float:
         """Follow ``temp`` at most with the profile's max_air_rate."""
-        rate = self.settings.profile.max_air_rate
+        profile = self.settings.profile
+        rate = profile.max_air_rate
         if rate is None:
             self._t_ctrl = temp
+            self._gap_since = None
+            self._draft_since = None
         elif (
             self._t_ctrl is None
             or self._t_ctrl_ts is None
@@ -363,9 +388,31 @@ class RoomController:
             or now - self._t_ctrl_ts > 2 * 3600
         ):
             self._t_ctrl = temp
+            self._gap_since = None
+            self._draft_since = None
         else:
-            step = rate * (now - self._t_ctrl_ts) / 3600.0
-            self._t_ctrl += clamp(temp - self._t_ctrl, -step, step)
+            hours = (now - self._t_ctrl_ts) / 3600.0
+            step = rate * hours
+            down = step
+            gap = self._t_ctrl - temp
+            if gap <= step:
+                self._gap_since = None
+                self._draft_since = None
+            else:
+                if self._gap_since is None or now < self._gap_since:
+                    self._gap_since = now
+                if (
+                    self._draft_since is None
+                    and gap >= DRAFT_GAP
+                    and now - self._gap_since <= DRAFT_ONSET_S
+                ):
+                    # The air left the limit by DRAFT_GAP within minutes: a
+                    # draft. A room that really cools (set-back, boiler off)
+                    # needs far longer to get that far away.
+                    self._draft_since = now
+                if self._draft_since is not None and now - self._draft_since < profile.draft_max_s:
+                    down = min(step, profile.draft_cool_rate * hours)
+            self._t_ctrl += clamp(temp - self._t_ctrl, -down, step)
         self._t_ctrl_ts = now
         return self._t_ctrl
 
