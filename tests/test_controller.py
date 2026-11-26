@@ -1,6 +1,8 @@
 """Unit tests for the room controller (no Home Assistant needed)."""
 from __future__ import annotations
 
+import pytest
+
 from custom_components.soncloutrv.controller import (
     CONTROL_MODE_BINARY,
     ControllerSettings,
@@ -117,7 +119,7 @@ def test_rate_limiter_ignores_drafts_but_follows_real_cooling():
     ctrl.add_temperature(now - 300, 19.5)
     res = ctrl.compute(now, 21.5)
     assert res.disturbance is True
-    assert res.temperature == 21.5 - 0.2  # 0.8 K/h * 15 min
+    assert res.temperature == 21.5 - 0.05  # a draft: 0.2 K/h * 15 min
     assert res.demand < 30.0  # the old controller asked for ~85 %
     assert ctrl.integral == integral  # nothing learned from the draft
     # the air recovers by itself -> back to normal
@@ -206,3 +208,72 @@ def test_legacy_gain_detection():
     assert is_legacy_default_gains(10.0, 0.005, 0.0)
     assert is_legacy_default_gains(20, 0.01, 500)
     assert not is_legacy_default_gains(15.0, 0.002, 0.0)
+
+
+def _settled(target: float = 22.2, integral: float = 8.0) -> tuple[RoomController, float]:
+    ctrl = RoomController("r")
+    ctrl.integral = integral
+    now = 0.0
+    for _ in range(8):
+        ctrl.add_temperature(now, target)
+        ctrl.compute(now, target)
+        now += 900
+    return ctrl, now - 900  # time of the last control step
+
+
+def test_long_draft_does_not_heat_against_the_open_window():
+    """26.11.2026: bedroom window open for 2 h, living room air 2 K down.
+
+    The old limiter followed the draft with 0.8 K/h: 30 % demand after an
+    hour, 66 % at the end, and the room 0.9 K too warm for the rest of the
+    day. The air came back by itself within an hour after the window closed.
+    """
+    ctrl, now = _settled()
+    base = ctrl.last_result.demand
+    demands = []
+    for k in range(8):  # 2 h
+        now += 900
+        ctrl.add_temperature(now - 600, 21.0)
+        ctrl.add_temperature(now - 300, 20.2)
+        res = ctrl.compute(now, 22.2)
+        demands.append(res.demand)
+        assert res.disturbance is True
+    assert res.temperature == pytest.approx(22.2 - 0.4, abs=0.01)  # 0.2 K/h for 2 h
+    assert max(demands) < base + 12.0
+    assert ctrl.integral == 8.0  # nothing learned from the draft
+    # window closed, the air is back -> normal control without a kick
+    now += 900
+    ctrl.add_temperature(now - 300, 22.0)
+    res = ctrl.compute(now, 22.2)
+    assert res.disturbance is False
+    assert res.demand < base + 12.0
+
+
+def test_draft_that_never_ends_is_a_real_deficit_after_three_hours():
+    ctrl, now = _settled()
+    for _ in range(12):  # 3 h of draft
+        now += 900
+        ctrl.add_temperature(now - 300, 20.2)
+        res = ctrl.compute(now, 22.2)
+    assert res.temperature == pytest.approx(22.2 - 0.6, abs=0.01)
+    for _ in range(4):  # from now on with max_air_rate (0.8 K/h)
+        now += 900
+        ctrl.add_temperature(now - 300, 20.2)
+        res = ctrl.compute(now, 22.2)
+    assert res.temperature == pytest.approx(22.2 - 0.6 - 0.8, abs=0.01)
+    assert res.demand > 40.0
+
+
+def test_room_that_really_cools_is_not_a_draft():
+    """Boiler off / set-back: the air falls by 1 K/h, not within minutes."""
+    ctrl, now = _settled()
+    temp = 22.2
+    for _ in range(8):
+        for _ in range(15):
+            now += 60
+            temp -= 1.0 / 60
+            ctrl.add_temperature(now, temp)
+        res = ctrl.compute(now, 22.2)
+    # followed with the full 0.8 K/h as before (a draft would give 21.8)
+    assert res.temperature < 20.8
+    assert res.demand > 40.0
